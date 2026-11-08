@@ -264,6 +264,11 @@ agent session view holds the viewed agent's thought the same way
   e97ef69's — the held thought alone, before the placeholder, the
   newest-record rule and the retry fix — the missing placeholder and the
   lingering thought in the first three and the retried line in the fourth.
-- Real provider: the reported prompt on ClinePass at 100×30, 80×24 and 80×14
-  — no hop at the thought → `skill` hand-off, and exactly one blank row above
-  the status line in every mid-turn frame.
+- Real provider, ClinePass's `deepseek-v4.1-flash-1017`: with the held
+  thought, the reported prompt at 100×30, 80×24 and 80×14 — no hop at the
+  thought → `skill` hand-off, and exactly one blank row above the status line
+  in every mid-turn frame. With the stand-in, five more turns, one of them a
+  thought → `bash` hand-off: no hop at any thought → call hand-off, and one
+  blank row above the status line in every mid-turn frame but a single 9 ms
+  one, where the reply's own blank line between two paragraphs was the
+  frontier. The only hops were thought → reply lifts (above), a row each.
