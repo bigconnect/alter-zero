@@ -185,7 +185,9 @@ fn gutter_body(text: &str, width: u16) -> Vec<Line<'static>> {
 /// Two animations off one clock, and neither can ever be committed: the whole
 /// block is live-only by construction (only the strip calls this), which is
 /// why the pulse and the shimmer are unconditional here and absent from every
-/// other renderer in this module.
+/// other renderer in this module. The strip also draws it for a thought that
+/// has just **settled**, held for a moment so a quick next cell can take its
+/// rows without the box moving (`docs/thought-handoff.md`).
 ///
 /// Blank source lines are skipped: reasoning is full of paragraph breaks, and
 /// spending the small window on them would show a third as much thought.
@@ -200,21 +202,11 @@ pub(super) fn live_reasoning_lines(text: &str, pulse: Duration, width: u16) -> V
     lines
 }
 
-/// A **settled** thought held in the strip until the next cell takes its rows
-/// (`docs/thought-handoff.md`): the live block with its header settled in
-/// place — the very `Thought for …` line [`reasoning_lines`] commits — over
-/// the same tail of thought, so it stands on exactly the rows the block did
-/// and the box does not move when the phase ends. When the next cell lands,
-/// the line commits with its spacer and the cell takes the tail's rows.
-pub(super) fn held_thought_lines(reasoning: &Reasoning, width: u16) -> Vec<Line<'static>> {
-    let mut lines = reasoning_lines(reasoning, width);
-    lines.extend(thought_tail(&reasoning.text, width));
-    lines
-}
-
 /// The last [`REASONING_PEEK_LINES`] wrapped rows of `text` in the `⎿`
 /// gutter, blank source lines skipped — the body under the live block's
-/// header, and under a held thought's settled line.
+/// header. Never under a settled line: a thought held for the next cell
+/// keeps its whole live block (`docs/thought-handoff.md`), and once it lets
+/// go its `Thought for …` line stands alone.
 fn thought_tail(text: &str, width: u16) -> Vec<Line<'static>> {
     let inner = body_width(width);
     let mut window: VecDeque<String> = VecDeque::new();

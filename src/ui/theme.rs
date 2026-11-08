@@ -381,6 +381,22 @@ pub(super) fn reasoning_label_color() -> Color {
 /// *now*. The whole thing is in the Ctrl+O transcript.
 pub(super) const REASONING_PEEK_LINES: usize = 3;
 
+/// How long a **settled** thought keeps its live block up, waiting for the
+/// next cell to take its rows (`docs/thought-handoff.md`). The backend
+/// settles a phase at the round's first tool-call piece and the call's cell
+/// lands once its arguments have streamed — a quick call's ~80 ms later — so
+/// a cell inside this window lands on the block's rows with the box holding
+/// still. Anything slower finds the thought collapsed into its `Thought for …`
+/// line alone, one spacer over the status line: the thought is never shown
+/// under its settled line, and no row is held blank for a cell on its way.
+///
+/// Short enough to read as part of the thinking — nobody can tell when a
+/// phase ended to within a few hundred milliseconds — and long enough to
+/// cover a quick call's generation. Measured from the frame clock's last
+/// reading before the hold ([`App::pulse`]), so the window is up to one
+/// frame shorter than this.
+pub(super) const REASONING_HOLD: Duration = Duration::from_millis(300);
+
 // ---------------------------------------------------------------------------
 // Background shells (docs/background.md): the backgrounded cell's fixed row,
 // the running-command Ctrl+B hint, the ↓ manager band, and the footer count.

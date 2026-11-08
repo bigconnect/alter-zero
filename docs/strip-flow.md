@@ -79,7 +79,7 @@ manager's `FlowSign::Frozen` (`docs/view-flow.md`) over
 `ui::live::strip_flow_key`: which conversation is on screen, whether a status
 line is up, each queued call's name/arguments/status, the live agent group's
 members, whether a thinking phase is open or a settled thought still holds
-its rows (`docs/thought-handoff.md`), and each `write` still being
+its rows for the moment it may (`docs/thought-handoff.md`), and each `write` still being
 generated, by its path and whether it has finished (`docs/write-streaming.md`).
 A new call, a resolution, a new round, the turn ending or a streaming `write`
 flipping from its tail to its head re-signs it; a streamed line does not. The width and

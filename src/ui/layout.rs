@@ -74,12 +74,12 @@ pub(super) const fn strip_rows(has_status: bool, preview_rows: u16, hang_rows: u
 /// its own trim (they share this walk, so they agree by construction).
 #[must_use]
 pub fn preview_rows(app: &App, width: u16) -> u16 {
-    // A thought that just settled stands on its block's rows until the next
-    // cell takes them — main session and agent session view alike
-    // (docs/thought-handoff.md).
+    // A thought that just settled keeps the block it settled from for a
+    // moment, so a quick next cell takes its rows — main session and agent
+    // session view alike (docs/thought-handoff.md).
     if let Some(thought) = held_thought_on_screen(app) {
-        let rows = super::reasoning::held_thought_lines(thought, width).len();
-        return u16::try_from(rows).unwrap_or(u16::MAX);
+        let block = super::reasoning::live_reasoning_lines(&thought.text, app.pulse(), width);
+        return u16::try_from(block.len()).unwrap_or(u16::MAX);
     }
     // An agent session view previews the *viewed agent's* stream — its live
     // tool cells, its thinking block, or its reply's uncommitted frontier
@@ -237,15 +237,21 @@ pub fn fitted_preview_rows(app: &App, width: u16, height: u16) -> u16 {
 }
 
 /// Whether the strip shows the **held thought** (`docs/thought-handoff.md`):
-/// one is held ([`App::held_thought`]), the conversation on screen is
-/// mid-turn, no modal prompt replaces the region, the thought is still the
-/// newest thing that conversation recorded, and nothing else has taken the
-/// preview slot — no call queued or streaming into a cell of its own, no
-/// agent group, no open read/search group, no new thinking phase, and no
-/// reply text beyond whitespace. The first frame this turns false, the
-/// boundary commits the held line and lets the thought go
-/// (`Session::sync_held_thought`), so the line and whatever took the slot
-/// land in one frame.
+/// one is held ([`App::held_thought`]) and has stood for less than
+/// `REASONING_HOLD`, the conversation on screen is mid-turn, no modal
+/// prompt replaces the region, the thought is still the newest thing that
+/// conversation recorded, and nothing else has taken the preview slot — no
+/// call queued or streaming into a cell of its own, no agent group, no open
+/// read/search group, no new thinking phase, and no reply text beyond
+/// whitespace. The first frame this turns false, the boundary commits the
+/// held line and lets the thought go (`Session::sync_held_thought`), so the
+/// line and whatever took the slot land in one frame.
+///
+/// The bound is what keeps the thought itself off the screen once it is
+/// over: a quick call's cell lands inside it, on the block's rows, and
+/// anything slower finds the thought collapsed into its `Thought for …`
+/// line alone, one spacer above the status line — never the line over its
+/// thought, and never a row held blank for a cell still on its way.
 ///
 /// The newest-record rule ties the hold to the thought's own round: a record
 /// with no cell — a task call — means the round has moved on and nothing
@@ -253,7 +259,10 @@ pub fn fitted_preview_rows(app: &App, width: u16, height: u16) -> u16 {
 /// out the next request.
 #[must_use]
 pub fn holds_thought(app: &App) -> bool {
-    if app.held_thought().is_none() || app.modal_open() {
+    let within_the_moment = app
+        .held_thought_age()
+        .is_some_and(|age| age < REASONING_HOLD);
+    if !within_the_moment || app.modal_open() {
         return false;
     }
     let says_something = |text: Option<&str>| text.is_some_and(|text| !text.trim().is_empty());

@@ -109,13 +109,13 @@ pub(super) fn preview_lines(
     rows: u16,
 ) -> Vec<Line<'static>> {
     let rows = usize::from(rows);
-    // A thought that just settled, held on its block's rows until the next
-    // cell takes them — its settled line over the thought's tail, the head
-    // kept on a squeezed slot (docs/thought-handoff.md). `preview_rows`
-    // sizes the same branch first.
+    // A thought that just settled keeps the block it settled from for a
+    // moment, so a quick next cell takes its rows — the head kept on a
+    // squeezed slot (docs/thought-handoff.md). `preview_rows` sizes the same
+    // branch first.
     if let Some(thought) = super::layout::held_thought_on_screen(app) {
         return trim_preview(
-            super::reasoning::held_thought_lines(thought, width),
+            live_reasoning_lines(&thought.text, app.pulse(), width),
             rows,
             false,
         );
@@ -457,18 +457,27 @@ pub(super) fn strip_lines(
         // spinner style (`/spinner`, docs/spinner.md). A blank row stands
         // in if the status somehow went while `has_status` said otherwise,
         // so the count still matches `strip_rows`' STATUS_ROWS.
+        //
+        // A settled thought holding its block keeps the block's timer too:
+        // the `Thinking for Ns` clause, frozen at the phase's length, goes in
+        // the frame the block does (docs/thought-handoff.md).
+        let held_clause = super::layout::held_thought_on_screen(app)
+            .map(|thought| Duration::from_secs(thought.secs));
         let line = if let Some(run) = app.viewed_agent() {
-            Some(styled_status_line(
-                &agent_view_status(run),
-                None,
-                app.spinner(),
-                width,
-            ))
+            let mut status = agent_view_status(run);
+            status.thinking = status.thinking.or(held_clause);
+            Some(styled_status_line(&status, None, app.spinner(), width))
         } else {
             // While some task is in progress the spinner wears its
             // activeForm instead of the turn's verb (docs/task-tools.md).
-            app.status()
-                .map(|status| styled_status_line(status, app.task_verb(), app.spinner(), width))
+            app.status().map(|status| match held_clause {
+                Some(clause) if status.thinking.is_none() => {
+                    let mut status = status.clone();
+                    status.thinking = Some(clause);
+                    styled_status_line(&status, app.task_verb(), app.spinner(), width)
+                }
+                _ => styled_status_line(status, app.task_verb(), app.spinner(), width),
+            })
         };
         lines.push(line.unwrap_or_default());
         // The rows hanging off the status line, in `hang_rows`' sum: the

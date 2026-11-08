@@ -236,8 +236,9 @@ impl Session<'_> {
     /// chat above it scrolling into real scrollback (`InlineViewport` notes that
     /// one-way move for the close's purge rebuild; `docs/permissions.md`).
     pub(crate) fn draw_conversation(&mut self) -> io::Result<()> {
-        // A held thought gives its rows up the frame something takes them,
-        // its line committing in that same frame (docs/thought-handoff.md).
+        // A held thought gives its rows up the frame something takes them or
+        // its moment passes, its line committing in that same frame
+        // (docs/thought-handoff.md).
         self.sync_held_thought();
         // Compute the strip preview cheaply once per frame (O(one line); a
         // forming table re-renders just its own block), so the status animation
@@ -369,11 +370,17 @@ impl Session<'_> {
 
     /// Let a held thought go once it no longer holds (`docs/thought-handoff.md`):
     /// something took the strip's slot — a call's cell, the reply's first
-    /// words, a new phase, a modal — the turn ended, or a commit already
-    /// released the held line ahead of itself. Its line is queued now, so the
-    /// frame that draws what replaced the thought writes the line with it:
-    /// the line and its spacer above, the new content on the rows the
-    /// thought's tail had, and the box exactly where it was.
+    /// words, a new phase, a modal — the turn ended, a commit already
+    /// released the held line ahead of itself, or its moment passed with
+    /// nothing to take its rows. Its line is queued now, so the frame that
+    /// draws what replaced the block writes the line with it: the line and
+    /// its spacer above, and under them the new content on the rows the
+    /// block had, the box exactly where it was — or, when nothing came, the
+    /// status line alone, that spacer the one blank row above it.
+    ///
+    /// The moment runs on the frame clock the draw tick injects before it
+    /// calls this (`update_status_times`), so a lapsed hold lets go on the
+    /// first frame past it — and a turn re-arms a frame every 32 ms.
     pub(crate) fn sync_held_thought(&mut self) {
         let holding = self.term.has_held() && ui::holds_thought(&self.app);
         if !holding {

@@ -186,9 +186,9 @@ impl Session<'_> {
             event,
             StreamEvent::ThinkingEnd | StreamEvent::StreamDone | StreamEvent::Error(_)
         ) {
-            // Only the phase's own end holds the line on the block's rows
-            // until the agent's next cell takes them; a run that ended or
-            // failed settles at once (docs/thought-handoff.md).
+            // Only the phase's own end holds the line, the block staying up a
+            // moment for the agent's next cell; a run that ended or failed
+            // settles at once (docs/thought-handoff.md).
             let hold = matches!(event, StreamEvent::ThinkingEnd);
             self.settle_agent_reasoning(id, viewing, width, hold);
         }
@@ -459,9 +459,9 @@ impl Session<'_> {
     /// bottom. See `docs/agent-view-streaming.md`.
     ///
     /// With `hold` (the phase's own `ThinkingEnd`) the line is held instead,
-    /// the main session's rule: the agent's strip keeps the thought on the
-    /// block's rows until its next cell takes them, so the box does not hop
-    /// up while the agent generates its call (`docs/thought-handoff.md`).
+    /// the main session's rule: the agent's strip keeps the block up for a
+    /// moment, so a quick next cell takes its rows without the box hopping
+    /// up and back (`docs/thought-handoff.md`).
     fn settle_agent_reasoning(&mut self, id: &str, viewing: bool, width: u16, hold: bool) {
         let secs = self
             .agent_thinking_clocks

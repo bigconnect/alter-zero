@@ -465,11 +465,12 @@ impl Session<'_> {
                 // The phase is over: record the `Thought for … · … tokens`
                 // cell here, before the round's reply text or tool calls
                 // exist, which is what puts it ahead of them in scrollback and
-                // history alike (docs/thinking-stream.md) — and **hold** it on
-                // the block's rows until the next cell takes them. The phase
-                // ends at the round's first tool-call piece, but the call has
-                // a cell only once its batch is announced; collapsing at once
-                // lifted the box until it landed (docs/thought-handoff.md).
+                // history alike (docs/thinking-stream.md) — and **hold** it:
+                // the block stays up for a moment, so a quick next cell takes
+                // its rows. The phase ends at the round's first tool-call
+                // piece, but the call has a cell only once its batch is
+                // announced; collapsing at once lifted the box until it
+                // landed (docs/thought-handoff.md).
                 self.hold_settled_reasoning();
                 false
             }
@@ -677,11 +678,12 @@ impl Session<'_> {
 
     /// [`Session::settle_reasoning`] at the phase's own end (`ThinkingEnd`),
     /// with the committed line **held** (`docs/thought-handoff.md`): the
-    /// strip keeps the thought on the block's rows — its header settled into
-    /// that very line — and the line reaches scrollback the frame the next
-    /// cell takes those rows ([`Session::sync_held_thought`]), or ahead of
-    /// whatever commits first. An Esc or an error settles at once instead:
-    /// the turn is ending, and its own commits follow straight after.
+    /// strip keeps the block the thought settled from for a moment, and the
+    /// line reaches scrollback the frame the next cell takes those rows or
+    /// the moment passes ([`Session::sync_held_thought`]), or ahead of
+    /// whatever commits first — never drawn over the thought itself. An Esc
+    /// or an error settles at once instead: the turn is ending, and its own
+    /// commits follow straight after.
     fn hold_settled_reasoning(&mut self) {
         self.settle_reasoning_with(true);
     }

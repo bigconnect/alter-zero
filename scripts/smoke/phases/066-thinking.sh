@@ -9,13 +9,13 @@ smoke_begin
 # the strip under a `● Thinking…` header over the `⎿` gutter, and COLLAPSES at
 # the phase's end into one bullet-less committed
 # `Thought for {n} · {t} tokens (ctrl+o to expand)` line — the reasoning text
-# itself never reaching scrollback (it expands in Ctrl+O instead; until the
-# round's first cell lands it stays on screen under the settled line, holding
-# the block's rows — docs/thought-handoff.md). Driven against the dummy's
-# canned two-line reasoning: poll for the live block, then for the settled
-# cell, and once the calls have landed assert the thought's text is nowhere in
-# the committed scrollback. Then the same turn with ALTER_ZERO_SHOW_THINKING=0
-# must show neither.
+# itself never reaching scrollback (it expands in Ctrl+O instead; the block
+# stays up a moment after the phase ends so a quick next cell can take its
+# rows, and the settled line is never drawn over it — docs/thought-handoff.md).
+# Driven against the dummy's canned two-line reasoning: poll for the live
+# block, then for the settled cell, and once the calls have landed assert the
+# thought's text is nowhere in the committed scrollback. Then the same turn
+# with ALTER_ZERO_SHOW_THINKING=0 must show neither.
 S66="${S}_thinking"
 launch "$S66" 80 24
 submit "$S66" "$USER_MSG"
@@ -79,13 +79,12 @@ if ! printf '%s' "$think_overlay" | grep -qF "Then edit it and run it."; then
 fi
 tmux send-keys -t "$S66" C-o
 sleep 0.3
-# The chain-of-thought itself never reaches scrollback. It stays on screen
-# under the settled line only until the round's first cell takes its rows —
-# the settled thought holds its block's rows so the box does not hop while the
-# call is generated (docs/thought-handoff.md) — so look once the batch has
-# landed, whether that happened under the overlay above or after it: the held
-# line commits ahead of the first cell either way. The read's bullet blinks,
-# so its header is matched without it.
+# The chain-of-thought itself never reaches scrollback. Its block stays on
+# screen a moment after the phase ends, so a quick next cell can take its
+# rows (docs/thought-handoff.md) — so look once the batch has landed, whether
+# that happened under the overlay above or after it: the held line commits
+# ahead of the first cell either way. The read's bullet blinks, so its header
+# is matched without it.
 think_after="$(wait_pane 20 "$S66" -S -80 -- -F "Read(about.py)")" # up to ~20s
 expect_has "$think_after" -F "Read(about.py)" "the round's calls never landed after the thought"
 expect_lacks "$think_after" -F "Then edit it and run it." "the chain-of-thought reached scrollback; only the collapsed cell may commit"

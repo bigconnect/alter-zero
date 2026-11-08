@@ -1,25 +1,31 @@
-//! A settled thought held on screen until the next cell takes its rows
-//! (`docs/thought-handoff.md`).
+//! A settled thought held on screen for a moment, so a quick next cell can
+//! take its rows (`docs/thought-handoff.md`).
 //!
 //! The backend settles a thinking phase at the round's first tool-call piece,
 //! but the call has a cell only once its batch is announced. The `● Thinking…`
 //! block used to collapse at once — its rows gone, the box rising, then
 //! dropping back when the call's cell landed: the flicker reported between a
-//! quick think and a `skill` call. The block now settles **in place** — its
-//! header becomes the `Thought for …` line, its thought stays under it — and
-//! gives its rows to whatever takes the slot next. Nothing else ever holds
-//! rows: between rounds the strip is the status line under one spacer.
+//! quick think and a `skill` call. So the block stays up **as it was** for at
+//! most [`REASONING_HOLD`]: a cell landing in that window takes its rows in
+//! one frame, and otherwise the hold lapses and the thought is its
+//! `Thought for …` line alone. The settled line is never drawn over its own
+//! thought, and no row is ever held blank: between rounds, and once a hold
+//! lapses, the strip is the status line under one spacer.
 
 use super::*;
 use crate::app::Reasoning;
 use crate::stream::{StreamEvent, ToolCallFragment, ToolCallSummary};
 use crate::ui::layout::{live_height_for, live_rows};
 use crate::ui::live::preview_lines;
+use crate::ui::theme::REASONING_HOLD;
 
 const W: u16 = 80;
 const H: u16 = 30;
 
 const THOUGHT: &str = "The user wants the champion.\nUse the skill first.\nThen search.";
+
+/// A beat inside the hold — how long a quick call takes to generate.
+const QUICK: Duration = Duration::from_millis(80);
 
 /// The composer path's region height for `app` — the boundary's
 /// `live_region_height` with no composer-replacing view open.
@@ -61,38 +67,52 @@ fn call(name: &str, args: &str) -> ToolCallSummary {
     }
 }
 
+/// The first piece of a `skill` call — what settles the thought, and what a
+/// skill call previews nothing for while it streams.
+fn skill_piece() -> ToolCallFragment {
+    ToolCallFragment {
+        index: 0,
+        name: "skill".into(),
+        arguments: String::new(),
+    }
+}
+
+/// Whether any row of `lines` is a settled `Thought for …` line.
+fn shows_a_settled_line(lines: &[Line]) -> bool {
+    lines
+        .iter()
+        .any(|line| plain(line).starts_with("Thought for"))
+}
+
 #[test]
-fn a_held_thought_stands_on_the_rows_its_block_did() {
+fn a_held_thought_keeps_the_block_it_settled_from() {
     let block = strip(&thinking(THOUGHT));
-    let (app, thought) = settled(THOUGHT);
+    let (app, _) = settled(THOUGHT);
     let held = strip(&app);
-    assert_eq!(held.len(), block.len(), "the slot keeps the block's rows");
     assert_eq!(
-        plain(&held[0]),
-        plain(&reasoning_lines(&thought, W)[0]),
-        "the header settles in place into the line scrollback will keep"
+        texts(&held),
+        texts(&block),
+        "the block stays up as it was, header and thought, so the box holds still"
     );
-    assert_eq!(
-        texts(&held[1..]),
-        texts(&block[1..]),
-        "the thought stays under it until something takes its rows"
+    assert!(
+        !shows_a_settled_line(&held),
+        "the settled line never stands over its own thought: {:?}",
+        texts(&held)
     );
     assert!(holds_thought(&app), "nothing has taken the slot yet");
 }
 
 #[test]
-fn the_box_does_not_move_from_the_thought_to_the_call() {
-    // The reported flicker: think → the Skill call.
+fn the_box_does_not_move_from_the_thought_to_a_quick_call() {
+    // The reported flicker: think → the Skill call, whose cell lands a beat
+    // after the thought settles.
     let block = region(&thinking(THOUGHT));
     let (mut app, thought) = settled(THOUGHT);
     assert_eq!(region(&app), block, "settling moves nothing");
     // The call is still being generated — the backend settled the thought at
     // its first piece — and a skill call previews nothing while it streams.
-    app.push_tool_call_fragment(&ToolCallFragment {
-        index: 0,
-        name: "skill".into(),
-        arguments: String::new(),
-    });
+    app.push_tool_call_fragment(&skill_piece());
+    app.set_pulse(QUICK);
     assert!(
         holds_thought(&app),
         "a call still being generated has no cell yet"
@@ -110,6 +130,99 @@ fn the_box_does_not_move_from_the_thought_to_the_call() {
         block,
         "the box ends where it started: no hop up, no drop back"
     );
+}
+
+#[test]
+fn a_held_thought_lets_go_once_its_moment_passes() {
+    // A call that takes longer to generate than the hold lasts finds the
+    // thought collapsed into its line: the thought is not shown under it
+    // while the call is written, and no row is held for the call's cell.
+    let (mut app, _) = settled(THOUGHT);
+    app.push_tool_call_fragment(&skill_piece());
+    app.set_pulse(REASONING_HOLD - Duration::from_millis(1));
+    assert!(holds_thought(&app), "still within the moment");
+    app.set_pulse(REASONING_HOLD);
+    assert!(
+        !holds_thought(&app),
+        "the moment has passed: the thought lets go of its rows"
+    );
+    assert_eq!(
+        preview_rows(&app, W),
+        0,
+        "nothing stands in the slot, not the thought and not a blank row"
+    );
+}
+
+#[test]
+fn once_the_thought_lets_go_the_region_opens_on_the_status_line() {
+    // The line and its one spacer commit above the region (the boundary's
+    // half); what is left below them opens on the status line itself, so the
+    // spacer is the one blank row between the line and the status line.
+    let (mut app, _) = settled(THOUGHT);
+    app.push_tool_call_fragment(&skill_piece());
+    app.set_pulse(REASONING_HOLD);
+    let height = region(&app);
+    let mut buf = Buffer::empty(Rect::new(0, 0, W, height));
+    render_live(buf.area, &mut buf, &app);
+    let top = row(&buf, 0, W);
+    assert!(
+        top.contains("esc to interrupt"),
+        "the region's first row is the status line, with nothing held above it: {top:?}"
+    );
+}
+
+/// The status line's row as the strip paints it.
+fn status_row(app: &App) -> String {
+    crate::ui::live::strip_lines(app, W, None, preview_rows(app, W))
+        .iter()
+        .map(plain)
+        .find(|row| row.contains("esc to interrupt"))
+        .expect("a status line mid-turn")
+}
+
+#[test]
+fn the_block_keeps_its_thinking_clause_while_it_holds() {
+    // The block stays up as it was, its timer with it: the status line's
+    // `Thinking for Ns` clause goes in the frame the block does, not a beat
+    // before it — at the settle the boundary's thinking clock stops, so the
+    // clause stands frozen at the phase's length.
+    let mut app = thinking(THOUGHT);
+    app.set_status_times(Duration::from_secs(4), Some(Duration::from_secs(2)));
+    assert!(
+        status_row(&app).contains("Thinking for 2s"),
+        "{}",
+        status_row(&app)
+    );
+    let thought = app.finish_reasoning(2).expect("a thought");
+    app.hold_thought(thought);
+    app.set_status_times(Duration::from_secs(4), None);
+    assert!(
+        status_row(&app).contains("Thinking for 2s"),
+        "the clause holds with the block: {}",
+        status_row(&app)
+    );
+    app.set_pulse(REASONING_HOLD);
+    assert!(
+        !status_row(&app).contains("Thinking for"),
+        "…and goes with it: {}",
+        status_row(&app)
+    );
+}
+
+#[test]
+fn the_moment_counts_from_the_hold_not_from_the_start() {
+    // The frame clock has run since the loop started; a thought settled a
+    // minute and a half in is held for the same moment as one settled at once.
+    let mut app = thinking(THOUGHT);
+    let start = Duration::from_secs(90);
+    app.set_pulse(start);
+    let thought = app.finish_reasoning(0).expect("a thought");
+    app.hold_thought(thought);
+    assert!(holds_thought(&app), "a thought held now holds");
+    app.set_pulse(start + QUICK);
+    assert!(holds_thought(&app), "…through a quick call's generation");
+    app.set_pulse(start + REASONING_HOLD);
+    assert!(!holds_thought(&app), "…and no longer");
 }
 
 #[test]
@@ -226,27 +339,47 @@ fn between_rounds_nothing_holds_a_row() {
     );
 }
 
-#[test]
-fn a_viewed_agents_thought_is_held_in_its_own_strip() {
-    // The agent session view streams the agent's own `● Thinking…` block and
-    // settles it the same way (docs/agent-view-streaming.md).
+/// A turn whose agent `a1` is thinking `text` with its session view open.
+fn agent_thinking(text: &str) -> App {
     let mut app = App::new();
     app.begin_stream();
     app.start_agent_group(false, &[spec("a1", "Search", false)]);
     app.begin_agent_reasoning("a1");
-    app.apply_agent_event("a1", &StreamEvent::ThinkingChunk(THOUGHT.into()));
+    app.apply_agent_event("a1", &StreamEvent::ThinkingChunk(text.into()));
     app.open_agent_view("a1");
+    app
+}
+
+#[test]
+fn a_viewed_agents_thought_is_held_in_its_own_strip() {
+    // The agent session view streams the agent's own `● Thinking…` block and
+    // settles it the same way (docs/agent-view-streaming.md).
+    let mut app = agent_thinking(THOUGHT);
     let block = strip(&app);
     let thought = app.finish_agent_reasoning("a1", 0).expect("a thought");
-    app.hold_thought(thought.clone());
+    app.hold_thought(thought);
     let held = strip(&app);
     assert_eq!(
-        held.len(),
-        block.len(),
-        "the agent's slot keeps the block's rows"
+        texts(&held),
+        texts(&block),
+        "the agent's block stays up as it was"
     );
-    assert_eq!(plain(&held[0]), plain(&reasoning_lines(&thought, W)[0]));
+    assert!(!shows_a_settled_line(&held), "{:?}", texts(&held));
     assert!(holds_thought(&app));
+    assert!(
+        status_row(&app).contains("Thinking for 0s"),
+        "the agent's block keeps its clause too: {}",
+        status_row(&app)
+    );
     app.apply_agent_event("a1", &StreamEvent::ToolBatch(vec![call("Bash", "ls")]));
     assert!(!holds_thought(&app), "the agent's call takes its slot");
+    // …and lets go after the same moment when nothing does.
+    let mut app = agent_thinking(THOUGHT);
+    let thought = app.finish_agent_reasoning("a1", 0).expect("a thought");
+    app.hold_thought(thought);
+    app.set_pulse(REASONING_HOLD);
+    assert!(
+        !holds_thought(&app),
+        "the agent's thought lets go once the moment passes"
+    );
 }

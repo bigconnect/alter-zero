@@ -1034,25 +1034,38 @@ first tool-call piece while the call gets a cell only at its batch, so
 collapsing the `● Thinking…` block at once sat the box up to three rows high
 for as long as the call took to generate and dropped it back when the cell
 landed (the flicker reported between a thought and a `skill` call; present in
-v0.18.0 too). The block now **settles in place** — `App::hold_thought` keeps
-the settled `Reasoning`, `ui::reasoning::held_thought_lines` draws its
-`Thought for …` line over the same tail of thought on the block's rows — while
-the boundary holds that line back from scrollback (`InlineViewport::hold`;
-any later `insert_before` releases it first, so scrollback order matches
-history by construction); `ui::holds_thought` says when something else has
-taken the slot — a call's cell, a streaming `write`, the reply's first words,
-a new phase, a modal, the turn's end, or any record after the thought (a
-task call has no cell, so its round leaves nothing to land on the rows) — and
-`Session::sync_held_thought` releases the line in that frame, the new content
-landing on the tail's rows, while only a purge rebuild drops it unwritten
-(history carries it; a `Retrying` leaves it alone, since the withdrawal's own
-rebuild clears a thought the failed attempt produced and an earlier round's
-must still commit) and the agent session view holds its viewed agent's
-thought the same way. A preview **floor** padding every hand-off with blank
-rows was tried first and replaced: between rounds it held three empty lines
-over the status line for as long as the next request took; `smoke.sh` Phase
-153 pins no hop *and* one blank row above the status line mid-turn, through
-the dummy and through the real backend against a paced stub; the **clickable OSC 8 links** (every URL an assistant
+v0.18.0 too). The block now **holds its rows for a moment** —
+`App::hold_thought` keeps the settled `Reasoning` with the frame clock's
+reading (`App::pulse`) and the strip keeps drawing the very block it settled
+from (`live_reasoning_lines`: the `● Thinking…` header over the same tail,
+the status line's `Thinking for Ns` clause frozen beside it) — while the
+boundary holds its `Thought for …` line back from scrollback
+(`InlineViewport::hold`; any later `insert_before` releases it first, so
+scrollback order matches history by construction); `ui::holds_thought` says
+when the hold ends — `REASONING_HOLD` (300 ms, `App::held_thought_age`)
+passing, or something else taking the slot: a call's cell, a streaming
+`write`, the reply's first words, a new phase, a modal, the turn's end, or
+any record after the thought (a task call has no cell, so its round leaves
+nothing to land on the rows) — and `Session::sync_held_thought` releases the
+line in that frame: a quick call's cell (~80 ms behind the thought) lands on
+the block's rows with the box holding still, and a slower one finds the line
+**alone**, one spacer above the status line. The settled line is never drawn
+over its own thought — the design before kept the tail under it until the
+next cell landed, which showed the finished thought for as long as a slow
+call took to generate (the report: "after thinking just show `Thought for …`,
+don't show the `⎿` …, only 1 newline"); a call slower than the moment lifts
+the box by the block's rows until its cell lands, the price of no tail and no
+blank rows. Only a purge rebuild drops a held line unwritten (history carries
+it; a `Retrying` leaves it alone, since the withdrawal's own rebuild clears a
+thought the failed attempt produced and an earlier round's must still commit)
+and the agent session view holds its viewed agent's thought the same way. A
+preview **floor** padding every hand-off with blank rows was tried first and
+replaced: between rounds it held three empty lines over the status line for
+as long as the next request took; `smoke.sh` Phase 153 pins the settled line
+never over its thought, the line alone while a slow call generates, no hop for
+a call landing inside the moment, and one blank row above the status line
+mid-turn, through the dummy and through the real backend against a paced
+stub; the **clickable OSC 8 links** (every URL an assistant
 reply shows — a bare URL in prose/lists/table cells, inline/fenced/indented
 code, a heading, or a `[text](url)` target — is painted inside an OSC 8
 hyperlink carrying the whole URL, so a wrapped URL's every fragment opens the

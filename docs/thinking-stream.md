@@ -116,7 +116,8 @@ both the text and the tool calls of its round — but a tool that is genuinely
 executing wins, because that is what the user is waiting on.
 
 The status line keeps its `· Thinking for 12s` clause: it is the *timer*, the
-block is the *content*.
+block is the *content* — and while a settled block holds its rows for the
+next cell, the clause stays with it, frozen at the phase's length.
 
 **No block, and no cell, while a collapsed read/search group is open.** A
 thought between two reads leaves the strip to the group's cell, which outranks
@@ -156,21 +157,25 @@ the status line and the turn summary use, so every duration and count in the
 TUI reads the same. A zero token count hides its clause; the `EXPAND_HINT` is
 the same string a capped tool peek ends with.
 
-**The block settles in place, and holds its rows until the next cell lands**
-(updated 2026-11-07). The settle commits two rows — the line and its spacer —
+**The block holds its rows for a moment, then the line stands alone**
+(updated 2026-11-08). The settle commits two rows — the line and its spacer —
 where the live block stood on up to five, and the backend settles it at the
 round's *first tool-call piece*, while the call gets a cell only once its
 batch is announced. Collapsing at once sat the box up to three rows high for
 as long as the call took to generate, then dropped it back: the flicker
-reported between a thought and a `skill` call. Now the header settles into
-the `Thought for …` line **in place**, the thought's tail stays under it, and
-the line is held back from scrollback (`InlineViewport::hold`) until
-something takes the slot — the call's cell, the reply's first words, a new
-phase — when the line commits and the new content lands on the tail's rows in
-one frame (`App::hold_thought`, `ui::holds_thought`,
-`docs/thought-handoff.md`). A record after the thought, such as a task call
-with no cell, lets it go too, since its round has moved on. An Esc or an
-error still settles at once.
+reported between a thought and a `skill` call. So at the phase's end the
+block stays up **as it was** — header, tail and the status line's clause —
+for at most `REASONING_HOLD` (300 ms), its line held back from scrollback
+(`InlineViewport::hold`): a cell that lands inside that moment — the call's,
+the reply's first words, a new phase — takes the block's rows in one frame as
+the line commits, and otherwise the hold lapses and the line stands alone,
+one spacer above the status line (`App::hold_thought`, `ui::holds_thought`,
+`docs/thought-handoff.md`). The settled line is never drawn over its own
+thought: the design before this one kept the tail under it until the next
+cell landed, which showed the finished thought for as long as a slow call
+took. A record after the thought, such as a task call with no cell, lets it
+go too, since its round has moved on. An Esc or an error still settles at
+once.
 
 **Ordering is invariant 4's business, not free.** The item is appended the
 moment thinking ends — which is usually before the round's reply text exists,

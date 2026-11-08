@@ -129,8 +129,9 @@ pub struct InlineViewport {
     pending: Vec<Line<'static>>,
     /// Lines committed but **held back** from the next flush ([`hold`]): a
     /// settled thought's `Thought for …` line, kept off scrollback while the
-    /// strip still shows the thought on its rows, until the next cell takes
-    /// them (`docs/thought-handoff.md`). Order is kept by construction: any
+    /// strip still shows the thought's block on its rows — until the next
+    /// cell takes them, or a moment passes and the line stands alone
+    /// (`docs/thought-handoff.md`). Order is kept by construction: any
     /// later [`insert_before`] queues these first, so scrollback can never
     /// show what came after them above them. [`release_held`] queues them
     /// explicitly; [`reflow`] drops them (its tail regenerates them from
@@ -629,8 +630,8 @@ impl InlineViewport {
 
     /// Commit `lines` but **hold them back** from the next flush — a settled
     /// thought's line, kept off scrollback while the strip still shows the
-    /// thought on its rows (`docs/thought-handoff.md`). They reach scrollback
-    /// ahead of the next [`insert_before`], or at [`release_held`].
+    /// thought's block on its rows (`docs/thought-handoff.md`). They reach
+    /// scrollback ahead of the next [`insert_before`], or at [`release_held`].
     ///
     /// [`insert_before`]: InlineViewport::insert_before
     /// [`release_held`]: InlineViewport::release_held
