@@ -21,9 +21,12 @@ launch "$S57" 100 34
 # running while the others wait — both states on screen at once.
 submit "$S57" "parallel"
 pulse_ready=""
+# A sibling's own header, not a bare `Waiting…`: the call being written stands
+# in as `● Bash` / `⎿ Waiting…` before the batch is announced.
 for _ in $(seq 1 250); do
 	cap="$(tmux capture-pane -t "$S57" -p)"
-	if printf '%s' "$cap" | grep -qF "Waiting…"; then
+	if printf '%s' "$cap" | grep -qF "Waiting…" \
+		&& printf '%s' "$cap" | grep -qF "Bash(ping -c 20 x.invalid)"; then
 		pulse_ready="$cap"
 		break
 	fi

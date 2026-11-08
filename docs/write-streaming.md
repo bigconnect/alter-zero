@@ -149,7 +149,10 @@ turn that showed nothing, putting the message back in the composer
 something. So an Esc after a previewed `write` appeared interrupts the turn
 instead, keeping the message and committing the notice. A call that previews
 nothing, such as a `bash` command being generated, still leaves the undo in
-place.
+place. The round's first such call does show a cell while it is written — a
+bare `● Bash` over `⎿ Waiting…`, `ToolDrafts::placeholder`
+(`docs/thought-handoff.md`) — but that names the tool and nothing the model
+wrote, so the undo ignores it.
 
 `revision` moves on every change. The Ctrl+O transcript signs on it.
 

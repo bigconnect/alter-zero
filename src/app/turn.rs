@@ -493,9 +493,10 @@ impl App {
     /// into a cell — the calls it was still generating, the `/compact` summary
     /// so far, and the history items it recorded since
     /// [`track_attempt`](App::track_attempt)'s mark: a run of its text
-    /// finalised when a phase or a `write` preview opened, and a thought it
-    /// settled. An attempt records nothing else, and the withdrawal never pops
-    /// an item of any other kind — a stale mark can only take back too little.
+    /// finalised when a phase or a draft's cell (a `write` preview, the
+    /// round's placeholder) opened, and a thought it settled. An attempt
+    /// records nothing else, and the withdrawal never pops an item of any
+    /// other kind — a stale mark can only take back too little.
     /// A retry before any content finds nothing and returns the default.
     pub fn withdraw_attempt(&mut self) -> Withdrawn {
         let live = self
@@ -503,7 +504,7 @@ impl App {
             .as_deref()
             .is_some_and(|text| !text.is_empty())
             || self.reasoning.is_some()
-            || self.tool_drafts.previews().next().is_some();
+            || self.tool_drafts.shows_cell();
         if let Some(text) = self.streaming.as_mut() {
             text.clear();
         }

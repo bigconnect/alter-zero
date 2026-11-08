@@ -508,15 +508,16 @@ impl AgentRun {
 
     /// Will folding `event` into **this run** finalise the run of streamed
     /// text before it? The fold's static segment boundaries, plus the one
-    /// only its state can answer — a streamed piece that **opens a previewed
-    /// call**, a `write` whose cell goes up under the text before it
-    /// (`docs/write-streaming.md`). What the session view's flush, which
+    /// only its state can answer — a streamed piece that **puts a cell up**:
+    /// a `write`'s preview, or the round's placeholder for a call it is
+    /// writing, under the text before it (`docs/write-streaming.md`,
+    /// `docs/thought-handoff.md`). What the session view's flush, which
     /// runs before the fold, asks; `apply` flushes at exactly these points,
     /// which `every_flush_point_is_declared` pins for every event.
     #[must_use]
     pub fn will_flush_segment(&self, event: &StreamEvent) -> bool {
         Self::flushes_segment(event)
-            || matches!(event, StreamEvent::ToolCallDelta(piece) if self.drafts.opens_preview(piece))
+            || matches!(event, StreamEvent::ToolCallDelta(piece) if self.drafts.opens_cell(piece))
     }
 
     /// The calls it is still generating this round, and the previewed ones
@@ -633,9 +634,10 @@ impl AgentRun {
             StreamEvent::ToolCallDelta(piece) => {
                 self.tokens += crate::app::count_tokens(&piece.tally_text()) as u64;
                 self.recovered();
-                // A `write` whose cell goes up: the text before it is its own
-                // message first (invariant 4, `will_flush_segment`).
-                if self.drafts.opens_preview(piece) {
+                // A cell going up — a `write`'s preview, or the round's
+                // placeholder (docs/thought-handoff.md): the text before it
+                // is its own message first (invariant 4, `will_flush_segment`).
+                if self.drafts.opens_cell(piece) {
                     self.flush_segment();
                 }
                 self.drafts.push(piece);
@@ -4056,8 +4058,8 @@ mod tests {
     fn a_subagents_write_previews_as_it_streams_after_its_text() {
         let mut run = AgentRun::new("a1", "d", GENERAL_PURPOSE, "p", false);
         run.apply(&StreamEvent::Chunk("Writing it now:".to_string()));
-        // That the opening piece is a segment boundary, and that a bash
-        // call's is not, is `every_flush_point_is_declared`'s to pin.
+        // That the opening piece is a segment boundary is
+        // `every_flush_point_is_declared`'s to pin.
         run.apply(&piece(0, "write", r#"{"path":"a.py","content":"x = 1\ny"#));
         let draft = run.drafts().previews().next().expect("a preview");
         assert_eq!(draft.path(), Some("a.py"));
@@ -4072,6 +4074,33 @@ mod tests {
         assert!(
             !run.will_flush_segment(&piece(0, "", r#" = 2"#)),
             "a later piece of the open preview flushes nothing"
+        );
+    }
+
+    #[test]
+    fn a_subagents_call_stands_in_after_its_text() {
+        // The round's placeholder is a cell like a preview: the text before
+        // it is its own message first (invariant 4), and the call waits
+        // under it in the session view (docs/thought-handoff.md).
+        let mut run = AgentRun::new("a1", "d", GENERAL_PURPOSE, "p", false);
+        run.apply(&StreamEvent::Chunk("Checking it now:".to_string()));
+        let opening = piece(0, "bash", r#"{"command":"l"#);
+        assert!(run.will_flush_segment(&opening));
+        run.apply(&opening);
+        assert_eq!(
+            run.drafts().placeholder().map(crate::app::ToolDraft::name),
+            Some("bash")
+        );
+        assert!(
+            matches!(
+                run.history.last(),
+                Some(HistoryItem::Message(m)) if m.role == Role::Assistant && m.text == "Checking it now:"
+            ),
+            "the text before the cell became its own message"
+        );
+        assert!(
+            !run.will_flush_segment(&piece(0, "", r#"s"}"#)),
+            "a later piece of the call flushes nothing"
         );
     }
 

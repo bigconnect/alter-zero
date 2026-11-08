@@ -156,21 +156,25 @@ the status line and the turn summary use, so every duration and count in the
 TUI reads the same. A zero token count hides its clause; the `EXPAND_HINT` is
 the same string a capped tool peek ends with.
 
-**The block settles in place, and holds its rows until the next cell lands**
-(updated 2026-11-07). The settle commits two rows — the line and its spacer —
-where the live block stood on up to five, and the backend settles it at the
-round's *first tool-call piece*, while the call gets a cell only once its
-batch is announced. Collapsing at once sat the box up to three rows high for
-as long as the call took to generate, then dropped it back: the flicker
-reported between a thought and a `skill` call. Now the header settles into
-the `Thought for …` line **in place**, the thought's tail stays under it, and
-the line is held back from scrollback (`InlineViewport::hold`) until
-something takes the slot — the call's cell, the reply's first words, a new
-phase — when the line commits and the new content lands on the tail's rows in
-one frame (`App::hold_thought`, `ui::holds_thought`,
-`docs/thought-handoff.md`). A record after the thought, such as a task call
-with no cell, lets it go too, since its round has moved on. An Esc or an
-error still settles at once.
+**The block gives its rows to the call it led to** (updated 2026-11-08). The
+settle commits two rows — the line and its spacer — where the live block stood
+on up to five, and the backend settles it at the round's *first tool-call
+piece*, while the call gets its cell only once its batch is announced.
+Collapsing into nothing sat the box up to three rows high for as long as the
+call took to generate, then dropped it back: the flicker reported between a
+thought and a `skill` call. So the piece that settles the thought also puts
+the call up: from its first named piece the call **stands in** as a bare
+`● Bash` over `⎿ Waiting…` (`ToolDrafts::placeholder`), and the committed
+`Thought for …` line plus that two-row cell fill the rows the block had, in
+the same frame — the thought's text gone at once, the box never rising. The
+batch then names the call on the same rows, and a `write` takes them with its
+own preview the same way. Where nothing stands in yet — the reply's first
+words still to come, a call whose name has not arrived, a task call, which has
+no cell — the settled line bridges, held back from scrollback
+(`InlineViewport::hold`) over the thought's tail until something takes the
+slot: as a rule the very next piece, and for a task call its record
+(`App::hold_thought`, `ui::holds_thought`, `docs/thought-handoff.md`). An Esc
+or an error still settles at once.
 
 **Ordering is invariant 4's business, not free.** The item is appended the
 moment thinking ends — which is usually before the round's reply text exists,

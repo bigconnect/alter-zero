@@ -254,10 +254,124 @@ fn a_streaming_write_colours_only_the_lines_its_cell_can_show() {
 #[test]
 fn a_call_to_any_other_tool_is_tracked_but_never_previewed() {
     let mut drafts = ToolDrafts::default();
-    assert!(!drafts.push(&piece(0, "bash", r#"{"command":"ls"}"#)));
+    // It opens a cell all the same — the round's placeholder, below.
+    assert!(drafts.push(&piece(0, "bash", r#"{"command":"ls"}"#)));
     assert_eq!(drafts.previews().count(), 0);
     assert!(drafts.push(&piece(1, "write", r#"{"path":"b.py""#)));
     assert_eq!(preview_paths(&drafts), ["b.py"]);
+}
+
+/// The wire names of the drafts the strip shows, in round order.
+fn shown_names(drafts: &ToolDrafts) -> Vec<&str> {
+    drafts.shown().map(ToolDraft::name).collect()
+}
+
+#[test]
+fn a_call_being_written_stands_in_as_the_rounds_placeholder() {
+    // A call that will have a cell of its own but previews nothing while it
+    // streams waits in the strip under its tool's name from its first piece
+    // (docs/thought-handoff.md) — what the thought before it gives its rows
+    // to the moment the model starts writing the call.
+    let mut drafts = ToolDrafts::default();
+    assert!(
+        drafts.push(&piece(0, "bash", r#"{"comm"#)),
+        "the first piece puts a cell up"
+    );
+    assert_eq!(drafts.placeholder().map(ToolDraft::name), Some("bash"));
+    assert!(drafts.shows_cell());
+    assert!(
+        !drafts.push(&piece(0, "", r#"and":"ls"}"#)),
+        "its later pieces open nothing"
+    );
+    // One per round: the calls after it wait for the batch, which shows them
+    // all — one placeholder per call could stand taller than the read group
+    // the batch's reads fold into, and the box would rise.
+    assert!(!drafts.push(&piece(1, "read", r#"{"path":"a.py"}"#)));
+    assert_eq!(shown_names(&drafts), ["bash"]);
+}
+
+#[test]
+fn a_write_previews_itself_and_a_task_call_stands_in_for_nothing() {
+    let mut drafts = ToolDrafts::default();
+    // A task call never has a cell — the checklist is its display.
+    assert!(!drafts.push(&piece(0, "taskcreate", r#"{"subject":"a"}"#)));
+    assert_eq!(drafts.placeholder(), None);
+    assert!(!drafts.shows_cell());
+    // A write previews its own cell, so it is no placeholder…
+    assert!(drafts.push(&piece(1, "write", r#"{"path":"a.py""#)));
+    assert_eq!(drafts.placeholder(), None);
+    // …and the round's first other call stands in beside it, in round order.
+    assert!(drafts.push(&piece(2, "bash", r#"{"command":"ls"}"#)));
+    assert_eq!(shown_names(&drafts), ["write", "bash"]);
+}
+
+#[test]
+fn the_placeholder_lasts_until_the_batch_takes_the_round() {
+    let mut drafts = ToolDrafts::default();
+    drafts.push(&piece(0, "bash", r#"{"command":"ls"}"#));
+    // The round is announced a moment before its batch — or a subagent's
+    // whole run before it, when the round launched one: the placeholder holds
+    // the slot until the cells arrive.
+    drafts.seal();
+    assert_eq!(drafts.placeholder().map(ToolDraft::name), Some("bash"));
+    drafts.adopt(["Bash"]);
+    assert_eq!(drafts.placeholder(), None, "the batch's cell took over");
+    // The next round's first call stands in afresh.
+    assert!(drafts.push(&piece(0, "read", r#"{"path":"a.py"}"#)));
+    assert_eq!(drafts.placeholder().map(ToolDraft::name), Some("read"));
+    drafts.seal();
+    assert!(
+        drafts.push(&piece(0, "edit", "{")),
+        "a sealed round's next piece opens the next round's"
+    );
+    assert_eq!(shown_names(&drafts), ["edit"]);
+    drafts.clear();
+    assert_eq!(drafts.placeholder(), None);
+}
+
+#[test]
+fn a_retired_call_stands_in_no_longer() {
+    // An agent call's cell is the agent group its launch puts up: once that
+    // takes the call, it must not wait in the strip after the group is gone.
+    let mut drafts = ToolDrafts::default();
+    drafts.push(&piece(0, "agent", r#"{"description":"Search"}"#));
+    drafts.push(&piece(1, "bash", r#"{"command":"ls"}"#));
+    assert_eq!(drafts.placeholder().map(ToolDraft::name), Some("agent"));
+    drafts.seal();
+    drafts.retire("agent");
+    assert_eq!(
+        drafts.placeholder().map(ToolDraft::name),
+        Some("bash"),
+        "the rest of the round still waits for its batch"
+    );
+}
+
+#[test]
+fn opens_cell_predicts_push_and_changes_nothing() {
+    let mut drafts = ToolDrafts::default();
+    let opening = piece(0, "bash", "{");
+    let revision = drafts.revision();
+    assert!(drafts.opens_cell(&opening));
+    assert_eq!(drafts.revision(), revision, "a question moves nothing");
+    assert!(drafts.push(&opening));
+    assert!(!drafts.opens_cell(&piece(0, "", "}")));
+    assert!(
+        !drafts.opens_cell(&piece(1, "read", "")),
+        "the round has its placeholder"
+    );
+    assert!(
+        drafts.opens_cell(&piece(2, "write", "")),
+        "a write's preview is a cell of its own"
+    );
+}
+
+#[test]
+fn a_name_that_arrives_late_opens_the_placeholder_then() {
+    let mut drafts = ToolDrafts::default();
+    assert!(!drafts.push(&piece(0, "", r#"{"command":"#)));
+    assert_eq!(drafts.placeholder(), None);
+    assert!(drafts.push(&piece(0, "bash", r#""ls"}"#)));
+    assert_eq!(drafts.placeholder().map(ToolDraft::name), Some("bash"));
 }
 
 #[test]
@@ -596,10 +710,45 @@ fn an_esc_after_a_previewed_write_streamed_interrupts_rather_than_undoing() {
     assert_eq!(roles(&app).first(), Some(&Role::User), "the message stays");
 
     // A call that previews nothing (a bash command being generated) still
-    // leaves the undo in place: nothing was shown.
+    // leaves the undo in place: its placeholder only stood in for a call
+    // that never ran, and nothing the model wrote was shown.
     let mut app = turn();
     app.push_tool_call_fragment(&piece(0, "bash", r#"{"command":"ls"}"#));
     assert_eq!(app.interrupt_turn(0), Some(InterruptedTurn::Undone));
+}
+
+#[test]
+fn an_agent_launch_retires_the_placeholder_its_call_stood_in_with() {
+    let mut app = turn();
+    app.push_tool_call_fragment(&piece(0, "agent", r#"{"description":"Search"}"#));
+    assert_eq!(
+        app.tool_drafts().placeholder().map(ToolDraft::name),
+        Some("agent")
+    );
+    app.start_agent_group(
+        false,
+        &[crate::stream::AgentSpec {
+            id: "a1".into(),
+            description: "Search".into(),
+            agent_type: "general-purpose".into(),
+            prompt: "task?".into(),
+            background: false,
+            call_id: None,
+            arguments: None,
+        }],
+    );
+    assert_eq!(app.tool_drafts().placeholder(), None);
+}
+
+#[test]
+fn a_retry_counts_a_placeholder_as_output_it_takes_back() {
+    // A lost connection voids the attempt: the placeholder goes with it, and
+    // it was on screen, so the retry says why it went.
+    let mut app = turn();
+    app.push_tool_call_fragment(&piece(0, "bash", r#"{"command":"ls"}"#));
+    let withdrawn = app.withdraw_attempt();
+    assert!(withdrawn.live);
+    assert!(!app.tool_drafts().shows_cell());
 }
 
 #[test]

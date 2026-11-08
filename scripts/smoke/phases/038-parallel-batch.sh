@@ -21,9 +21,13 @@ RAW39="$(mktemp)"
 tmux pipe-pane -t "$S_BATCH" -o "cat >> $RAW39"
 submit "$S_BATCH" "run three pings in parallel"
 batch_waiting=""
+# Wait for a SIBLING's own header: the call being written stands in as a bare
+# `● Bash` / `⎿ Waiting…` before the batch is announced (docs/thought-handoff.md),
+# so a `Waiting…` row alone no longer means the batch is up.
 for _ in $(seq 1 130); do # up to ~20s (pause + first-half text + thinking, then tools)
 	cap="$(tmux capture-pane -t "$S_BATCH" -p -S -50)"
-	if printf '%s' "$cap" | grep -qF "Waiting…"; then
+	if printf '%s' "$cap" | grep -qF "Waiting…" \
+		&& printf '%s' "$cap" | grep -qF "Bash(ping -c 20 x.invalid)"; then
 		batch_waiting="$cap"
 		break
 	fi

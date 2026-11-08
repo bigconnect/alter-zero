@@ -376,8 +376,11 @@ impl App {
     /// spec and open the live group cell. The loop flushed the streaming
     /// segment first (the ToolBatch dance), so the cell slots after the text.
     pub fn start_agent_group(&mut self, background: bool, specs: &[AgentSpec]) {
-        // The round's calls are all made (docs/write-streaming.md).
+        // The round's calls are all made (docs/write-streaming.md), and its
+        // launches have their cell now: none waits in the strip once the
+        // group is gone (docs/thought-handoff.md).
         self.tool_drafts.seal();
+        self.tool_drafts.retire(crate::llm::tools::AGENT_TOOL_NAME);
         for spec in specs {
             // The launch's place in the round the backend announced ahead
             // of it, found by the call id its spec carries

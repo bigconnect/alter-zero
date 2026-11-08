@@ -32,11 +32,13 @@ const DUMMY_THINKING: &str = "Let me read the file first.\nThen edit it and run 
 /// The dummy's canned tool-call "generation" fragments, streamed as
 /// [`StreamEvent::ToolCallDelta`]s just before each batch — the pieces a real
 /// model emits while producing a `tool_calls` request: the name, then the
-/// arguments. These calls preview nothing, so they only feed the token tally
-/// and the status ticks while the model *generates* them (like
-/// [`DUMMY_THINKING`] does for reasoning, `docs/status-indicator.md`). The
-/// file-change demo's `write` is generated from its real arguments instead,
-/// so the file streams into its cell (`files_turn`, `docs/write-streaming.md`).
+/// arguments. They feed the token tally, so the status ticks while the model
+/// *generates* them (like [`DUMMY_THINKING`] does for reasoning,
+/// `docs/status-indicator.md`), and the first one's name puts the round's
+/// placeholder up — the call waiting under its tool's name, where the thought
+/// before it stood (`docs/thought-handoff.md`). The file-change demo's
+/// `write` is generated from its real arguments instead, so the file streams
+/// into its cell (`files_turn`, `docs/write-streaming.md`).
 const DUMMY_READ_CALL: &[&str] = &["read", "{\"path\":", "\"about.py\"}"];
 const DUMMY_ABOUT_EDIT_CALL: &[&str] = &["edit", "{\"path\":", "\"about.py\",", "\"old_string\":"];
 const DUMMY_ABOUT_BASH_CALL: &[&str] = &["bash", "{\"command\":", "\"python3 about.py\"}"];

@@ -625,8 +625,15 @@ fn live_call_full_lines(
         }
         lines.push(Line::default());
     }
-    for draft in drafts.previews() {
-        lines.extend(draft_cell_lines(draft, None, None, width, paths, true));
+    // The calls still being written: a `write` streaming into its cell, and
+    // the round's placeholder waiting as the strip shows it
+    // (docs/write-streaming.md, docs/thought-handoff.md).
+    for draft in drafts.shown() {
+        if draft.is_previewed() {
+            lines.extend(draft_cell_lines(draft, None, None, width, paths, true));
+        } else {
+            lines.extend(tool_full_lines(&draft.waiting_cell(), width, paths));
+        }
         lines.push(Line::default());
     }
     lines

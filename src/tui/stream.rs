@@ -439,15 +439,18 @@ impl Session<'_> {
             StreamEvent::ToolCallDelta(piece) => {
                 // The model is generating a tool call: counted into the token
                 // tally (like reasoning) so the status ticks while it
-                // generates, and — for a `write` — previewed, the file
-                // streaming into its live cell (docs/write-streaming.md).
-                // Never committed: the cell commits when the call resolves.
+                // generates, and shown — a `write` previewed, the file
+                // streaming into its live cell (docs/write-streaming.md),
+                // any other call waiting under its tool's name from this
+                // first piece, which is also where a thought before it gives
+                // up its rows (docs/thought-handoff.md). Never committed: the
+                // cell commits when the call resolves.
                 //
                 // Flush before you interleave (the module's first rule): the
-                // piece that opens a previewed call puts a cell up, so the
-                // run of text before it is finalised **now** — committed with
-                // its withheld last line — and the cell sits under it, under
-                // the blank spacer the committed cell will keep.
+                // piece that puts a cell up has the run of text before it
+                // finalised **now** — committed with its withheld last line —
+                // and the cell sits under it, under the blank spacer the
+                // committed cell will keep.
                 if self.app.push_tool_call_fragment(&piece) {
                     self.flush_segment(committing, width);
                     self.render.reset();

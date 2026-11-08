@@ -73,6 +73,14 @@ The existing `ToolStart{name,args}` / `ToolEnd{output,ok,truncated}` pair is
 unchanged. A backend that never batches (the `!` shell) simply never sends
 `ToolBatch` — a lone `ToolStart` still works.
 
+The batch only exists once the model has finished writing every call, so
+before it the round's first call with a cell of its own **stands in** from
+its first named piece — a bare `● Bash` over the same `⎿ Waiting…` row,
+drawn by the same renderer (`ToolDrafts::placeholder`,
+`docs/thought-handoff.md`; a `write` previews itself instead). The batch then
+names it on the same rows and puts the calls after it under it, so the region
+only grows.
+
 ### App state (`app/tools.rs`)
 
 `current_tool: Option<ToolCall>` becomes a **queue**: `tool_queue:

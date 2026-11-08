@@ -1124,6 +1124,28 @@ fn ctrl_o_shows_a_streaming_write_whole_and_follows_it() {
 }
 
 #[test]
+fn ctrl_o_shows_a_call_being_written_waiting_as_the_strip_does() {
+    // The strip's placeholder for a call the model is still writing
+    // (docs/thought-handoff.md) shows in the transcript's live tail too, and
+    // a new piece that only grows its arguments re-signs nothing visible.
+    let mut app = App::new();
+    app.begin_stream();
+    app.push_tool_call_fragment(&crate::stream::ToolCallFragment {
+        index: 0,
+        name: "bash".to_string(),
+        arguments: r#"{"command":"l"#.to_string(),
+    });
+    let mut cache = TranscriptCache::new();
+    let texts: Vec<String> = cache.lines(&app, 80).iter().map(plain).collect();
+    let at = texts
+        .iter()
+        .position(|row| row == "● Bash")
+        .unwrap_or_else(|| panic!("the call's waiting cell: {texts:#?}"));
+    assert_eq!(texts[at + 1], "  ⎿  Waiting…", "{texts:#?}");
+    assert_eq!(cache.lines(&app, 80), transcript_lines(&app, 80).as_slice());
+}
+
+#[test]
 fn ctrl_o_shows_a_queued_writes_whole_file() {
     let mut app = App::new();
     app.begin_stream();

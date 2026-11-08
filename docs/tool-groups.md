@@ -263,6 +263,10 @@ Made 2 scratchpad edits +26 -1 (ctrl+o to expand)
   counts the content it carries (the adopted draft, else the call's verbatim
   arguments); an `edit` names its lines only once it has run, since only
   running it reports the diff.
+- **No other call stands in under an open group.** Outside a group the
+  round's first call shows a waiting `● Bash` / `⎿ Waiting…` while the model
+  writes it (`docs/thought-handoff.md`). Under one it does not: the call may
+  be one more read that folds in, and the group's cell already holds the slot.
 
 **What counts as the scratchpad** (`PathDisplay::in_scratchpad`): this
 session's own directory, wherever `ALTER_ZERO_SCRATCHPAD_DIR` put it — the

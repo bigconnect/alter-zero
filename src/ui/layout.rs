@@ -97,9 +97,11 @@ pub fn preview_rows(app: &App, width: u16) -> u16 {
     if app.agent_group().is_some() || !app.tool_queue().is_empty() {
         return u16::try_from(preview_tool_lines(app, width).len()).unwrap_or(u16::MAX);
     }
-    // A `write` still being generated previews its streaming cell
-    // (docs/write-streaming.md), sized from the walk the strip draws.
-    if app.tool_drafts().previews().next().is_some() {
+    // A call still being generated shows its cell — a `write` streaming
+    // into its file, else the round's waiting placeholder
+    // (docs/write-streaming.md, docs/thought-handoff.md) — sized from the
+    // walk the strip draws.
+    if app.tool_drafts().shows_cell() {
         let lines = super::live::drafting_lines(app, width);
         return u16::try_from(lines.len()).unwrap_or(u16::MAX);
     }
@@ -263,7 +265,7 @@ pub fn holds_thought(app: &App) -> bool {
         return !run.status.is_final()
             && newest_is_thought(&run.history)
             && run.tool_queue.is_empty()
-            && run.drafts().previews().next().is_none()
+            && !run.drafts().shows_cell()
             && run.reasoning().is_none()
             && !says_something(run.streaming.as_deref());
     }
@@ -271,7 +273,7 @@ pub fn holds_thought(app: &App) -> bool {
         && newest_is_thought(&app.history)
         && app.agent_group().is_none()
         && app.tool_queue().is_empty()
-        && app.tool_drafts().previews().next().is_none()
+        && !app.tool_drafts().shows_cell()
         && app.tool_group_range().is_none()
         && app.reasoning().is_none()
         && !says_something(app.streaming_text())

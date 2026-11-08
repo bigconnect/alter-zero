@@ -22,8 +22,11 @@ sf_pane=""
 sf_full=""
 for _ in $(seq 1 400); do # the batch is announced a couple of seconds in
 	sf_pane="$(tmux capture-pane -t "$S106" -p)"
+	# The last sibling's own header: a bare `Waiting…` is also the stand-in
+	# the call being written shows before the batch is announced.
 	if printf '%s' "$sf_pane" | grep -qF "esc to interrupt" \
-		&& printf '%s' "$sf_pane" | grep -qF "Waiting…"; then
+		&& printf '%s' "$sf_pane" | grep -qF "Waiting…" \
+		&& printf '%s' "$sf_pane" | grep -qF "Bash(ping -c 20 x.invalid)"; then
 		sf_full="$(tmux capture-pane -t "$S106" -p -S -80)"
 		break
 	fi

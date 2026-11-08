@@ -86,30 +86,63 @@ fn the_box_does_not_move_from_the_thought_to_the_call() {
     let block = region(&thinking(THOUGHT));
     let (mut app, thought) = settled(THOUGHT);
     assert_eq!(region(&app), block, "settling moves nothing");
-    // The call is still being generated — the backend settled the thought at
-    // its first piece — and a skill call previews nothing while it streams.
+    // The backend settles the thought at the call's first piece, and that
+    // piece names the call: it stands in at once, waiting, on the rows the
+    // thought had — the thought's text gone with its phase, its line
+    // committed above with its spacer.
     app.push_tool_call_fragment(&ToolCallFragment {
         index: 0,
         name: "skill".into(),
         arguments: String::new(),
     });
     assert!(
-        holds_thought(&app),
-        "a call still being generated has no cell yet"
+        !holds_thought(&app),
+        "the call's placeholder takes the slot"
     );
-    assert_eq!(region(&app), block, "…so the thought keeps its rows");
-    // The batch is announced: the call's cell takes the slot, and the held
-    // line commits with it — the line and its spacer above, the cell where
-    // the thought was.
-    app.start_tool_batch(&[call("Skill", "web-search")]);
-    assert!(!holds_thought(&app), "the call's cell takes the slot");
     app.drop_held_thought();
+    assert_eq!(texts(&strip(&app)), ["● Skill", "  ⎿  Waiting…"]);
     let committed = u16::try_from(reasoning_lines(&thought, W).len() + 1).unwrap_or(u16::MAX);
     assert_eq!(
         region(&app) + committed,
         block,
-        "the box ends where it started: no hop up, no drop back"
+        "the box stays where it was: no hop up"
     );
+    // The batch's cell lands on the placeholder's rows and stands no
+    // shorter, so it never drops the box back either.
+    let standing = region(&app);
+    app.start_tool_batch(&[call("Skill", "web-search")]);
+    assert!(
+        region(&app) >= standing,
+        "the call's cell never lifts the box"
+    );
+    assert_eq!(
+        texts(&strip(&app)),
+        ["● Skill(web-search)", "  ⎿  Waiting…"]
+    );
+}
+
+#[test]
+fn no_placeholder_stands_under_an_open_read_group() {
+    // Between reads the open group's cell keeps the slot, and the call being
+    // written may be one more read that folds into it: a placeholder under
+    // the group would go as it folded, and the box would rise.
+    let mut app = App::new();
+    app.begin_stream();
+    app.start_tool("Read", "a.py", None);
+    app.end_tool("1 x", true);
+    assert_eq!(
+        app.place_resolved_tool(),
+        crate::app::ToolPlacement::Held,
+        "the read opens a group"
+    );
+    let group = texts(&strip(&app));
+    assert!(!group.is_empty(), "the group's cell holds the slot");
+    app.push_tool_call_fragment(&ToolCallFragment {
+        index: 0,
+        name: "read".into(),
+        arguments: String::new(),
+    });
+    assert_eq!(texts(&strip(&app)), group);
 }
 
 #[test]
@@ -247,6 +280,18 @@ fn a_viewed_agents_thought_is_held_in_its_own_strip() {
     );
     assert_eq!(plain(&held[0]), plain(&reasoning_lines(&thought, W)[0]));
     assert!(holds_thought(&app));
-    app.apply_agent_event("a1", &StreamEvent::ToolBatch(vec![call("Bash", "ls")]));
+    // The agent starts writing its call: the call stands in at once, waiting.
+    app.apply_agent_event(
+        "a1",
+        &StreamEvent::ToolCallDelta(ToolCallFragment {
+            index: 0,
+            name: "bash".into(),
+            arguments: String::new(),
+        }),
+    );
     assert!(!holds_thought(&app), "the agent's call takes its slot");
+    app.drop_held_thought();
+    assert_eq!(texts(&strip(&app)), ["● Bash", "  ⎿  Waiting…"]);
+    app.apply_agent_event("a1", &StreamEvent::ToolBatch(vec![call("Bash", "ls")]));
+    assert_eq!(texts(&strip(&app)), ["● Bash(ls)", "  ⎿  Waiting…"]);
 }

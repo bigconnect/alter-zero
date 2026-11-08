@@ -335,6 +335,15 @@ fn previewed_wire(name: &str) -> bool {
     PREVIEWED_TOOLS.iter().any(|(wire, _)| *wire == name)
 }
 
+/// Whether a call to the wire tool `name` can stand in the strip as a
+/// waiting cell while it streams ([`ToolDrafts::placeholder`]): a named call
+/// that will have a cell of its own and previews nothing — not a `write`,
+/// whose preview is its cell, and not a task call, which has no cell
+/// anywhere (the checklist under the status line is its display).
+fn placeholder_wire(name: &str) -> bool {
+    !name.is_empty() && !previewed_wire(name) && !crate::tasks::is_task_tool(name)
+}
+
 /// Whether a queued cell named `display` (a [`crate::app::ToolCall::name`])
 /// is a previewed call — one that owns an adopted draft.
 #[must_use]
@@ -434,6 +443,30 @@ impl ToolDraft {
         self.sealed || self.args.field("content").is_some_and(|field| field.closed)
     }
 
+    /// The cell a [placeholder](ToolDrafts::placeholder) draws: the call
+    /// waiting under its tool's display name, no arguments yet — the very
+    /// cell a batch's not-yet-run sibling is, so the placeholder and the cell
+    /// that replaces it are drawn by one renderer
+    /// (`docs/thought-handoff.md`).
+    #[must_use]
+    pub fn waiting_cell(&self) -> crate::app::ToolCall {
+        crate::app::ToolCall {
+            name: crate::llm::tools::display_name(&self.name),
+            args: String::new(),
+            status: crate::app::ToolStatus::Waiting,
+            output: String::new(),
+            timestamp: String::new(),
+            shell: false,
+            truncated: false,
+            context_output: None,
+            approval_note: None,
+            arguments: None,
+            batch: None,
+            call_id: None,
+            position: None,
+        }
+    }
+
     /// The content so far, syntax-highlighted as `lang` under the `code`
     /// theme with tabs expanded to `tab_width` spaces, keeping the colours of
     /// only its first and newest `lines` lines — what the strip's cell shows,
@@ -504,11 +537,12 @@ pub struct ToolDrafts {
 
 impl ToolDrafts {
     /// Fold one streamed piece into its slot's draft, opening the draft when
-    /// the slot is new. Returns whether the piece **opened a previewed
-    /// call** — the moment the boundary flushes the streaming text before
-    /// the cell goes up (`tui/stream.rs`' *flush before you interleave*).
+    /// the slot is new. Returns whether the piece **put a cell up** — a
+    /// previewed call or the round's placeholder — the moment the boundary
+    /// flushes the streaming text before the cell goes up (`tui/stream.rs`'
+    /// *flush before you interleave*).
     pub fn push(&mut self, fragment: &ToolCallFragment) -> bool {
-        let opens = self.opens_preview(fragment);
+        let opens = self.opens_cell(fragment);
         if self.sealed {
             self.generating.clear();
             self.sealed = false;
@@ -619,6 +653,66 @@ impl ToolDrafts {
     /// the order each opened.
     pub fn previews(&self) -> impl Iterator<Item = &ToolDraft> {
         self.generating.iter().filter(|draft| draft.is_previewed())
+    }
+
+    /// The round's **placeholder**: the first call it is writing that will
+    /// have a cell of its own but previews nothing as it streams, shown in
+    /// the strip as that cell waiting under its tool's name until the round's
+    /// batch replaces it (`docs/thought-handoff.md`). A thought gives its rows
+    /// to it the moment the model starts the call, so the thought's text does
+    /// not outlive its phase and the box does not move: the placeholder's two
+    /// rows are never more than the cell that replaces them.
+    ///
+    /// One per round, since a cell per call could stand taller than the read
+    /// group the batch's reads fold into, and the box would rise as they
+    /// folded. It outlasts the round's announcement ([`seal`](Self::seal)) —
+    /// the instant before the batch, or a subagent's whole run when the round
+    /// launched one — and goes when the batch adopts the round, at a
+    /// [`clear`](Self::clear), or with its call [`retire`](Self::retire)d.
+    #[must_use]
+    pub fn placeholder(&self) -> Option<&ToolDraft> {
+        self.generating
+            .iter()
+            .find(|draft| placeholder_wire(&draft.name))
+    }
+
+    /// The drafts the strip shows, in the order they opened: every previewed
+    /// call and the round's [`placeholder`](Self::placeholder).
+    pub fn shown(&self) -> impl Iterator<Item = &ToolDraft> {
+        let placeholder = self.placeholder().map(|draft| draft.index);
+        self.generating
+            .iter()
+            .filter(move |draft| draft.is_previewed() || Some(draft.index) == placeholder)
+    }
+
+    /// Whether the strip has a draft's cell to show — a preview or the
+    /// placeholder.
+    #[must_use]
+    pub fn shows_cell(&self) -> bool {
+        self.shown().next().is_some()
+    }
+
+    /// Whether [`push`](Self::push)ing `fragment` would put a cell up — open
+    /// a previewed call ([`opens_preview`](Self::opens_preview)) or the
+    /// round's [`placeholder`](Self::placeholder) — asked without folding
+    /// it, for the agent session view, whose segment flush runs before its
+    /// fold (invariant 4).
+    #[must_use]
+    pub fn opens_cell(&self, fragment: &ToolCallFragment) -> bool {
+        self.opens_preview(fragment)
+            || (placeholder_wire(&fragment.name) && (self.sealed || self.placeholder().is_none()))
+    }
+
+    /// The round's calls to the wire tool `wire` were taken over by a cell
+    /// that is no batch's — the agent group a subagent launch puts up — so
+    /// they stand in no longer: once that cell is gone, a placeholder left
+    /// behind would wait for a call long since run.
+    pub fn retire(&mut self, wire: &str) {
+        let before = self.generating.len();
+        self.generating.retain(|draft| draft.name != wire);
+        if self.generating.len() != before {
+            self.revision += 1;
+        }
     }
 
     /// The previewed calls the queue holds, front first: the k-th queued

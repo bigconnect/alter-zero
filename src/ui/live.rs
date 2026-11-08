@@ -124,9 +124,8 @@ pub(super) fn preview_lines(
         // The viewed agent's own strip — fed the same boundary-built frontier
         // the main branch below gets, since its commits go through the same
         // kind of `StreamRender` (`docs/agent-view-streaming.md`).
-        let streaming = run.tool_queue.is_empty()
-            && run.drafts().previews().next().is_none()
-            && run.reasoning().is_none();
+        let streaming =
+            run.tool_queue.is_empty() && !run.drafts().shows_cell() && run.reasoning().is_none();
         trim_preview(
             agent_view_preview_lines(run, app.pulse(), width, stream_preview, app.path_display()),
             rows,
@@ -134,13 +133,15 @@ pub(super) fn preview_lines(
         )
     } else if app.agent_group().is_some() || !app.tool_queue().is_empty() {
         trim_preview(preview_tool_lines(app, width), rows, false)
-    } else if app.tool_drafts().previews().next().is_some() {
-        // A `write` the model is still generating, its file streaming into
-        // the cell (docs/write-streaming.md) — before any batch exists, so
-        // it never meets the queue above, and after the backend closed any
-        // thinking phase, so it never meets the block below. Under the open
-        // read/search group, which a scratchpad write streams into instead
-        // of a cell of its own (docs/tool-groups.md *Scratchpad edits*).
+    } else if app.tool_drafts().shows_cell() {
+        // A call the model is still generating: a `write`, its file
+        // streaming into the cell (docs/write-streaming.md), else the round's
+        // placeholder waiting under its tool's name (docs/thought-handoff.md)
+        // — before any batch exists, so it never meets the queue above, and
+        // after the backend closed any thinking phase, so it never meets the
+        // block below. Under the open read/search group, which a scratchpad
+        // write streams into instead of a cell of its own and which keeps the
+        // placeholder's slot (docs/tool-groups.md *Scratchpad edits*).
         trim_preview(drafting_lines(app, width), rows, false)
     } else {
         let group = open_group_lines(app, width);
@@ -182,22 +183,36 @@ pub(super) fn preview_lines(
 /// reserved and the rows drawn agree.
 pub(super) fn drafting_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     let mut lines = open_group_lines(app, width);
-    for draft in app
-        .tool_drafts()
-        .previews()
-        .filter(|draft| !app.is_group_draft(draft))
-    {
+    // The open group keeps the placeholder's slot: the call being written
+    // may be one more read that folds into it (docs/thought-handoff.md).
+    let group_open = !lines.is_empty();
+    for draft in app.tool_drafts().shown() {
+        let cell = if draft.is_previewed() {
+            if app.is_group_draft(draft) {
+                continue;
+            }
+            draft_cell_lines(
+                draft,
+                None,
+                Some(app.pulse()),
+                width,
+                app.path_display(),
+                false,
+            )
+        } else if group_open {
+            continue;
+        } else {
+            live_tool_lines(
+                &draft.waiting_cell(),
+                width,
+                app.pulse(),
+                app.path_display(),
+            )
+        };
         if !lines.is_empty() {
             lines.push(Line::default());
         }
-        lines.extend(draft_cell_lines(
-            draft,
-            None,
-            Some(app.pulse()),
-            width,
-            app.path_display(),
-            false,
-        ));
+        lines.extend(cell);
     }
     lines
 }
@@ -401,18 +416,22 @@ pub(super) fn draft_preview_lines(
     paths: &PathDisplay,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for draft in drafts.previews() {
+    for draft in drafts.shown() {
         if !lines.is_empty() {
             lines.push(Line::default());
         }
-        lines.extend(draft_cell_lines(
-            draft,
-            None,
-            Some(pulse),
-            width,
-            paths,
-            false,
-        ));
+        if draft.is_previewed() {
+            lines.extend(draft_cell_lines(
+                draft,
+                None,
+                Some(pulse),
+                width,
+                paths,
+                false,
+            ));
+        } else {
+            lines.extend(live_tool_lines(&draft.waiting_cell(), width, pulse, paths));
+        }
     }
     lines
 }
@@ -546,9 +565,10 @@ pub(super) fn strip_content_preview_rows(app: &App, width: u16, term_height: u16
 }
 
 /// Whether the preview slot is showing **live cells** — a running/queued tool
-/// call, a live agent group, or an open thinking phase — rather than a
-/// streaming reply's frontier. What [`strip_content_preview_rows`] branches
-/// on; mirrors [`preview_rows`]' own branch order.
+/// call, a call being written, a live agent group, or an open thinking
+/// phase — rather than a streaming reply's frontier. What
+/// [`strip_content_preview_rows`] branches on; mirrors [`preview_rows`]' own
+/// branch order.
 fn strip_preview_is_live_cells(app: &App) -> bool {
     // A held thought is the block it settled from, still on screen.
     if super::layout::holds_thought(app) {
@@ -556,12 +576,12 @@ fn strip_preview_is_live_cells(app: &App) -> bool {
     }
     if let Some(run) = app.viewed_agent() {
         return !run.tool_queue.is_empty()
-            || run.drafts().previews().next().is_some()
+            || run.drafts().shows_cell()
             || run.reasoning().is_some();
     }
     app.agent_group().is_some()
         || !app.tool_queue().is_empty()
-        || app.tool_drafts().previews().next().is_some()
+        || app.tool_drafts().shows_cell()
         || app.reasoning().is_some()
         || app.tool_group_range().is_some()
 }
@@ -642,6 +662,12 @@ pub(super) fn strip_flow_key(app: &App) -> u64 {
         draft.path().hash(&mut hasher);
         draft.finished().hash(&mut hasher);
     }
+    // …and the round's placeholder on the call it stands in for, which no
+    // piece of its arguments changes (docs/thought-handoff.md).
+    drafts
+        .placeholder()
+        .map(crate::app::ToolDraft::name)
+        .hash(&mut hasher);
     hasher.finish()
 }
 

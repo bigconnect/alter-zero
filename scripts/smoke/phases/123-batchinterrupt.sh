@@ -20,8 +20,11 @@ smoke_begin
 S_INT="${S}_batchint"
 launch "$S_INT" 90 40 "env $CFG_ENV_NOHIST ALTER_ZERO_STARTUP_DELAY_MS=$SMOKE_STARTUP_MS ALTER_ZERO_CHUNK_DELAY_MS=400 $BIN"
 submit "$S_INT" "run three pings in parallel"
-if ! wait_for 25 "$S_INT" -F "Waiting…"; then
-	fail "the parallel batch never showed a ⎿ Waiting… sibling"
+# The last sibling's own header marks the batch: a bare `Waiting…` is also the
+# stand-in the call being written shows BEFORE the batch is announced
+# (docs/thought-handoff.md), and Esc there has no calls to resolve yet.
+if ! wait_for 25 "$S_INT" -F "Bash(ping -c 20 x.invalid)"; then
+	fail "the parallel batch never showed its ⎿ Waiting… siblings"
 fi
 keys "$S_INT" Escape
 interrupted="$(wait_settled 5 "$S_INT" -S -60 -- -F "Conversation interrupted")"

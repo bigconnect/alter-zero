@@ -168,10 +168,11 @@ release heading when a version is cut.
   the call's cell was on screen, and for as long as the call took to
   generate the box and footer jumped up as much as three rows and then
   dropped back: a flicker that came and went with how fast the call
-  arrived. The block now settles in place — its header becomes the
-  `Thought for …` line with the thought still under it — and the call's
-  cell takes those rows when it lands, in the main conversation and in a
-  subagent's session view alike (`docs/thought-handoff.md`).
+  arrived. A call now shows up the moment the model starts writing it —
+  `● Skill` over `⎿ Waiting…`, on the rows the thought had — and names what
+  it will do once the model has finished it, so the thought's text goes as
+  soon as the thinking ends and nothing moves, in the main conversation and
+  in a subagent's session view alike (`docs/thought-handoff.md`).
 
 - **A broken hook is named by the first line of its command.** When a hook
   written as a multi-line inline script failed, timed out or printed
