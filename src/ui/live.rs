@@ -110,9 +110,9 @@ pub(super) fn preview_lines(
 ) -> Vec<Line<'static>> {
     let rows = usize::from(rows);
     // A thought that just settled, held on its block's rows until the next
-    // cell takes them — its settled line over the thought's tail, the head
-    // kept on a squeezed slot (docs/thought-handoff.md). `preview_rows`
-    // sizes the same branch first.
+    // cell takes them — its settled line over the empty rows its thought
+    // stood on, the head kept on a squeezed slot (docs/thought-handoff.md).
+    // `preview_rows` sizes the same branch first.
     if let Some(thought) = super::layout::held_thought_on_screen(app) {
         return trim_preview(
             super::reasoning::held_thought_lines(thought, width),

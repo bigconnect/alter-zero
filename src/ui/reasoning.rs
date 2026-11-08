@@ -203,18 +203,20 @@ pub(super) fn live_reasoning_lines(text: &str, pulse: Duration, width: u16) -> V
 /// A **settled** thought held in the strip until the next cell takes its rows
 /// (`docs/thought-handoff.md`): the live block with its header settled in
 /// place — the very `Thought for …` line [`reasoning_lines`] commits — over
-/// the same tail of thought, so it stands on exactly the rows the block did
-/// and the box does not move when the phase ends. When the next cell lands,
-/// the line commits with its spacer and the cell takes the tail's rows.
+/// **empty** rows where its tail stood, so the thought's text goes with its
+/// phase while the slot keeps exactly the rows the block did and the box does
+/// not move. When the next cell lands, the line commits with its spacer and
+/// the cell takes the empty rows.
 pub(super) fn held_thought_lines(reasoning: &Reasoning, width: u16) -> Vec<Line<'static>> {
     let mut lines = reasoning_lines(reasoning, width);
-    lines.extend(thought_tail(&reasoning.text, width));
+    let tail = thought_tail(&reasoning.text, width).len();
+    lines.extend(std::iter::repeat_n(Line::default(), tail));
     lines
 }
 
 /// The last [`REASONING_PEEK_LINES`] wrapped rows of `text` in the `⎿`
 /// gutter, blank source lines skipped — the body under the live block's
-/// header, and under a held thought's settled line.
+/// header, which a held thought's settled line keeps as many empty rows of.
 fn thought_tail(text: &str, width: u16) -> Vec<Line<'static>> {
     let inner = body_width(width);
     let mut window: VecDeque<String> = VecDeque::new();

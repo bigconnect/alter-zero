@@ -246,8 +246,9 @@ pub struct App {
     reasoning: Option<String>,
     /// The thought that just settled, **held on screen** until the next cell
     /// takes its rows: the strip draws it as its settled `Thought for …`
-    /// line over the thought's tail, standing on the rows the live block
-    /// did, while the boundary holds that line back from scrollback. Set and
+    /// line over empty rows where its thought stood — the text goes with
+    /// its phase — standing on the rows the live block did, while the
+    /// boundary holds that line back from scrollback. Set and
     /// dropped by the boundary ([`hold_thought`](App::hold_thought)); see
     /// `docs/thought-handoff.md`.
     held_thought: Option<Reasoning>,

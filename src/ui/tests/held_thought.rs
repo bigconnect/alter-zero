@@ -6,9 +6,10 @@
 //! block used to collapse at once — its rows gone, the box rising, then
 //! dropping back when the call's cell landed: the flicker reported between a
 //! quick think and a `skill` call. The block now settles **in place** — its
-//! header becomes the `Thought for …` line, its thought stays under it — and
-//! gives its rows to whatever takes the slot next. Nothing else ever holds
-//! rows: between rounds the strip is the status line under one spacer.
+//! header becomes the `Thought for …` line, the rows its thought stood on
+//! stay, empty, since the text goes with its phase — and gives those rows to
+//! whatever takes the slot next. Nothing else ever holds rows: between rounds
+//! the strip is the status line under one spacer.
 
 use super::*;
 use crate::app::Reasoning;
@@ -72,10 +73,11 @@ fn a_held_thought_stands_on_the_rows_its_block_did() {
         plain(&reasoning_lines(&thought, W)[0]),
         "the header settles in place into the line scrollback will keep"
     );
-    assert_eq!(
-        texts(&held[1..]),
-        texts(&block[1..]),
-        "the thought stays under it until something takes its rows"
+    assert!(
+        held[1..].iter().all(|row| plain(row).trim().is_empty()),
+        "the thought's text goes with its phase — its rows stand empty \
+         until something takes them: {:?}",
+        texts(&held)
     );
     assert!(holds_thought(&app), "nothing has taken the slot yet");
 }
@@ -246,6 +248,11 @@ fn a_viewed_agents_thought_is_held_in_its_own_strip() {
         "the agent's slot keeps the block's rows"
     );
     assert_eq!(plain(&held[0]), plain(&reasoning_lines(&thought, W)[0]));
+    assert!(
+        held[1..].iter().all(|row| plain(row).trim().is_empty()),
+        "the agent's thought goes with its phase too: {:?}",
+        texts(&held)
+    );
     assert!(holds_thought(&app));
     app.apply_agent_event("a1", &StreamEvent::ToolBatch(vec![call("Bash", "ls")]));
     assert!(!holds_thought(&app), "the agent's call takes its slot");

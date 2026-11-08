@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 153 — a settled thought holds the box still until the next cell lands, and leaves no blank rows
+# Phase 153 — a settled thought's text goes at once, its rows hold the box still until the next cell lands, and no other blank rows
 
 . "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 smoke_begin
@@ -10,21 +10,25 @@ smoke_begin
 # lifted the box by the block's rows for as long as the call took to generate,
 # then dropped it back when the cell landed — the flicker reported between a
 # quick think and a `skill` call. The block now settles IN PLACE: its header
-# becomes the `Thought for …` line, the thought stays under it, and the
-# batch's cells take those rows the frame they land.
+# becomes the `Thought for …` line, the rows its thought stood on stay, EMPTY,
+# and the batch's cells take them the frame they land. Keeping the thought's
+# text there instead read as a flash of stale thought ("this shows in the TUI
+# fast then removed fast"), so the text goes the moment its phase does.
 #
-# The first fix held the rows blank instead, and that is the second half of
-# this phase: blank rows held between rounds — after a command's tall live
-# tail settled into its peek — sat as three empty lines over the status line
-# for as long as the next request took (the reported "it should be 1 new
-# line"). Mid-turn the status line has exactly ONE blank row above it.
+# Those empty rows are the only blank rows the strip may hold. A preview floor
+# held rows blank between rounds — after a command's tall live tail settled
+# into its peek — and they sat as three empty lines over the status line for
+# as long as the next request took (the reported "it should be 1 new line").
+# Mid-turn the status line has exactly ONE blank row above it, except under a
+# settled thought line that waits for its call's cell.
 #
 # Each turn is sampled ~20 times a second: the footer never moves up while
-# the hand-off is under way, the settled line is seen with the thought still
-# under it, and no sample shows two blank rows directly above the status line
-# — each candidate confirmed against a second capture a beat later, Phase
-# 121's rule (a torn frame lasts microseconds, a hop or a held gap as long as
-# the call takes to generate). Four turns:
+# the hand-off is under way, the settled line is seen standing over its empty
+# rows, the thought's text is never on screen with its settled line, and no
+# sample shows two blank rows directly above the status line anywhere else —
+# each candidate confirmed against a second capture a beat later, Phase 121's
+# rule (a torn frame lasts microseconds, a hop or a held gap as long as the
+# call takes to generate). Four turns:
 #   1. the default dummy turn — a paragraph, a two-line thought, then a
 #      Read+Edit+Bash batch generated over about a second — on a terminal with
 #      room below the box, its byte stream checked for purge rebuilds and its
@@ -41,27 +45,43 @@ RAW153="$SMOKE_TMP/phase153.raw"
 THOUGHT153="Let me read the file first."
 
 # The blank rows directly above the status line in a capture, or nothing when
-# no status line is on screen.
+# no status line is on screen. Under a settled thought's line they are the
+# rows its thought stood on, waiting for the call's cell: up to its three
+# rows of thought and the strip's own spacer, counted as the one spacer.
 gap_above_status() {
 	printf '%s\n' "$1" | awk '
-		/esc to interrupt/ { print blank; exit }
+		/esc to interrupt/ {
+			if (above ~ /^Thought for [0-9]+s/ && blank <= 4) print 1; else print blank
+			exit
+		}
 		/^[[:space:]]*$/ { blank++; next }
-		{ blank = 0 }'
+		{ blank = 0; above = $0 }'
+}
+
+# 1 when a capture shows a settled thought's line standing over nothing but
+# empty rows down to the status line — the hand-off's held view.
+held_view() {
+	printf '%s\n' "$1" | awk '
+		/^Thought for [0-9]+s/ { armed = 1; next }
+		armed && /^[[:space:]]*$/ { next }
+		armed { print (/esc to interrupt/ ? 1 : 0); exit }'
 }
 
 # watch_turn SESSION FOOTER THOUGHT [SETTLED_CELL] — sample a turn until its
 # status line goes; sets W_SAMPLES, W_HOPS (confirmed rises of the FOOTER
 # row while the status line was up — none counted once a sample shows
 # SETTLED_CELL, whose round's end may lift the box), W_GAPS (confirmed
-# samples with more than one blank row above the status line) and W_HELD
-# (a sample showed the settled line with THOUGHT still under it — only the
-# strip ever shows the thought, which never commits).
+# samples with more than one blank row above the status line), W_HELD (a
+# sample showed the settled line over its empty rows) and W_LINGERED
+# (confirmed samples showing THOUGHT beside its settled line — the thought's
+# text outliving its phase).
 watch_turn() {
 	local sess="$1" footer="$2" thought="$3" settled="${4:-}" vis again now prev=0 seen=0 gap
 	W_SAMPLES=0
 	W_HOPS=0
 	W_GAPS=0
 	W_HELD=0
+	W_LINGERED=0
 	for _ in $(seq 1 600); do # up to ~30s
 		vis="$(tmux capture-pane -t "$sess" -p)"
 		W_SAMPLES=$((W_SAMPLES + 1))
@@ -72,9 +92,20 @@ watch_turn() {
 			# which is a settle rather than a hop.
 			break
 		fi
+		if [ "$(held_view "$vis")" = 1 ]; then
+			W_HELD=1
+		fi
 		if printf '%s' "$vis" | grep -qE '^Thought for [0-9]+s' &&
 			printf '%s' "$vis" | grep -qF "$thought"; then
-			W_HELD=1
+			sleep 0.15
+			again="$(tmux capture-pane -t "$sess" -p)"
+			if printf '%s' "$again" | grep -qE '^Thought for [0-9]+s' &&
+				printf '%s' "$again" | grep -qF "$thought"; then
+				W_LINGERED=$((W_LINGERED + 1))
+				if [ "$W_LINGERED" -le 2 ]; then
+					dump "$sess: the thought's text is still on screen under its settled line (sample $W_SAMPLES)" "$again"
+				fi
+			fi
 		fi
 		now=$(printf '%s\n' "$vis" | grep -nF "$footer" | tail -1 | cut -d: -f1)
 		if [ "${now:-0}" -gt 0 ] && [ "$now" -lt "$prev" ]; then
@@ -117,7 +148,10 @@ watch_turn() {
 # expect_watch WHAT — the verdicts on the last watch_turn.
 expect_watch() {
 	if [ "$W_HELD" -ne 1 ]; then
-		fail "$1: the settled thought never held its rows: no sample showed its line with the thought still under it"
+		fail "$1: the settled thought never held its rows: no sample showed its line over its empty rows"
+	fi
+	if [ "$W_LINGERED" -ne 0 ]; then
+		fail "$1: the thought's text outlived its phase in $W_LINGERED sample(s): it must go the moment the thought settles (see the frames above)"
 	fi
 	if [ "$W_HOPS" -ne 0 ]; then
 		fail "$1: the box hopped up $W_HOPS time(s) mid-turn: the thought gave its rows up before the next cell could take them (see the frames above)"
@@ -132,7 +166,7 @@ launch "$S153" 80 24
 tmux pipe-pane -t "$S153" -o "cat > $RAW153"
 submit "$S153" "$USER_MSG"
 watch_turn "$S153" 'dummy_model_name ·' "$THOUGHT153"
-note "tall: sampled $W_SAMPLES times; box hops=$W_HOPS; held gaps=$W_GAPS; held thought seen=$W_HELD"
+note "tall: sampled $W_SAMPLES times; box hops=$W_HOPS; held gaps=$W_GAPS; held rows seen=$W_HELD; thought lingered=$W_LINGERED"
 expect_watch "tall"
 wait_summaries 20 "$S153" 1 >/dev/null || fail "the default turn never finished"
 tmux pipe-pane -t "$S153" # close the recording before quitting
@@ -155,7 +189,7 @@ wait_gone 10 "$S153" || fail "the app did not quit on Ctrl+C"
 launch "$S153S" 80 16
 submit "$S153S" "$USER_MSG"
 watch_turn "$S153S" 'dummy_model_name ·' "$THOUGHT153"
-note "short: sampled $W_SAMPLES times; box hops=$W_HOPS; held gaps=$W_GAPS; held thought seen=$W_HELD"
+note "short: sampled $W_SAMPLES times; box hops=$W_HOPS; held gaps=$W_GAPS; held rows seen=$W_HELD; thought lingered=$W_LINGERED"
 expect_watch "short"
 short="$(wait_summaries 20 "$S153S" 1)" || fail "the short session's turn never finished"
 # Settled, the box is flush at the bottom: nothing held outlived the turn.
@@ -290,9 +324,10 @@ launch -c "$(work_dir real)" "$S153R" 100 30 "$SR_APP"
 submit "$S153R" "run the command"
 # Only a rise before the call's cell is the hand-off's: the round's end may
 # lift the box, its cell settling shorter than it ran. The blank-row rule
-# holds throughout — the call being written, and the round boundary.
+# holds throughout — past the settled thought's own empty rows while the call
+# is written, and at the round boundary.
 watch_turn "$S153R" 'stub-model ·' "Let me run the command first." "● Bash("
-note "real backend: sampled $W_SAMPLES times; rises before the cell=$W_HOPS; held gaps=$W_GAPS; held thought seen=$W_HELD"
+note "real backend: sampled $W_SAMPLES times; rises before the cell=$W_HOPS; held gaps=$W_GAPS; held rows seen=$W_HELD; thought lingered=$W_LINGERED"
 expect_watch "real backend"
 real="$(wait_pane 20 "$S153R" -S -60 -- -F "Done.")" || fail "the stub's second round never answered"
 dump "the settled real-backend session" "$real"
