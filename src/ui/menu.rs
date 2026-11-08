@@ -9,8 +9,9 @@ use super::*;
 /// How many rows the command palette occupies for `app` at `width`: 0 when
 /// closed, otherwise **the built line count** of [`command_menu_lines`] — the
 /// row-budget window over the matches, wrapped-description continuation rows
-/// included, never more than `MENU_MAX_ROWS` (or a single placeholder row
-/// when the query matches nothing). Height-is-the-line-count is the
+/// included, never more than `MENU_MAX_ROWS`, plus the `(n/total)` counter
+/// row under it (or a single placeholder row when the query matches
+/// nothing). Height-is-the-line-count is the
 /// settings/model pickers' rule (`docs/view-flow.md`): the reserved rows and
 /// the painted rows agree by construction, which is what lets a long
 /// description *wrap* instead of clipping at the width. [`live_height`] adds
@@ -173,16 +174,36 @@ fn menu_row_lines(cmd: &SlashCommand, selected: bool, width: u16) -> Vec<Line<'s
     lines
 }
 
+/// The palette's dim `(n/total)` counter under its window: where the
+/// highlight sits among **every** match, and how many there are — five rows
+/// show a fraction of the registry, so the commands scrolled out of view are
+/// never a surprise, and a query reads how many it left (`/co` → `(1/3)`).
+/// The pickers' counter (`list_counter_line`) in the band's own dress:
+/// hanging under the names at [`MENU_INDENT`], dim like an unselected row,
+/// and `…`-cut to a degenerate width the way a name is.
+fn menu_counter_line(selected: usize, total: usize, width: u16) -> Line<'static> {
+    let room = (width as usize).saturating_sub(cols(MENU_INDENT)).max(1);
+    let counter = format!("({}/{total})", selected + 1);
+    Line::from(vec![
+        Span::raw(MENU_INDENT),
+        Span::styled(
+            super::wrap::ellipsize(&counter, room),
+            Style::new().fg(menu_dim_color()),
+        ),
+    ])
+}
+
 /// The styled lines for the open command palette: the session's commands
 /// ([`App::commands`] — the active model's speed-tier rows included) filtered
 /// by the query, their descriptions **wrapped** to the width, windowed by
 /// `centered_window_rows` to keep the selection **centered** inside the
 /// `MENU_MAX_ROWS` **row budget** — the `/model` and `/resume` lists' rule,
 /// so the commands above *and* below the highlight stay in view as it
-/// scrolls. At widths where every description fits its row that is the
-/// familiar eight commands, and where descriptions wrap the band shows fewer
-/// *whole* commands (scrolling reveals the rest) rather than clipping text or
-/// growing under the box; or a single dim placeholder when nothing matches.
+/// scrolls — over the `(n/total)` counter row (`menu_counter_line`). At
+/// widths where every description fits its row that is five commands, and
+/// where descriptions wrap the band shows fewer *whole* commands (scrolling
+/// reveals the rest) rather than clipping text or growing under the box; or
+/// a single dim placeholder when nothing matches, with nothing to count.
 /// Empty when the palette is closed.
 #[must_use]
 pub fn command_menu_lines(app: &App, width: u16) -> Vec<Line<'static>> {
@@ -207,13 +228,16 @@ pub fn command_menu_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     let (start, end) = centered_window_rows(&heights, menu.selected, max);
     // `take(max)` only ever bites on a lone entry taller than the whole
     // budget (a degenerately narrow terminal): its first rows show.
-    blocks
+    let mut lines: Vec<Line<'static>> = blocks
         .into_iter()
         .skip(start)
         .take(end.saturating_sub(start))
         .flatten()
         .take(max)
-        .collect()
+        .collect();
+    let selected = menu.selected.min(matches.len() - 1);
+    lines.push(menu_counter_line(selected, matches.len(), width));
+    lines
 }
 
 /// How many rows the `@` file picker occupies for `app`: 0 when closed, one

@@ -251,9 +251,15 @@ which Ctrl+V reads the clipboard from.
   `/copy`, `/export`, `/diff`, `/init`, `/compact`, `/context`, `/usage`, `/resume`, `/model`, `/login`, `/settings`,
   `/theme`, `/mascot`, `/spinner`, `/hooks`, `/skills`, `/mcp`, `/donate`, `/secrets`, and `/quit`),
   filtered by name-prefix as you type after the `/`; `/` alone matches everything.
-  ↑/↓ move the highlight, and the list shows at most `MENU_MAX_ROWS` (8) rows at a
-  time — the registry has outgrown the window, so a bare `/` shows the first eight,
-  and the window keeps the highlight **centered** the way the `/model` and
+  ↑/↓ move the highlight, and the list shows at most `MENU_MAX_ROWS` (5) rows at a
+  time — the registry has outgrown the window, so a bare `/` shows the first five
+  over a dim **`(n/total)` counter** row (`menu_counter_line`, hanging under the
+  names at `MENU_INDENT` like the pickers' `(n/total)`): where the highlight sits
+  among every match, so the commands past the window are never a surprise, and
+  how many a query left (`/co` reads `(1/3)`; a miss's placeholder has nothing to
+  count and stands alone). Eight rows filled half a small terminal with a list
+  the counter now summarises in one row. The window keeps the highlight
+  **centered** the way the `/model` and
   `/resume` lists do (`centered_window`): ↓ walks it down to the middle row, then
   the list scrolls under it, so the commands above *and* below it stay in view
   and each step scrolls the next one in, sliding to an edge only where the list
@@ -271,7 +277,10 @@ which Ctrl+V reads the clipboard from.
   the variable-height `centered_window`) shows fewer *whole* commands rather than
   growing under the box or clipping text, centering the highlight by *rows*: each
   whole entry joins whichever side of it holds fewer rows so far (above on a
-  tie, `centered_window`'s middle row) until neither side's next entry fits — and
+  tie, `centered_window`'s middle row) until neither side's next entry fits (in
+  five rows two two-row entries can leave no room for a third, so on a narrow
+  terminal the highlight can sit at the window's edge; the counter still says
+  where it is), the counter row riding under the budget rather than inside it — and
   the selection wears the **`→ ` marker** the `@` and `$` pickers already did
   (`MENU_MARKER`, every other row opening on `MENU_INDENT`, its width in spaces,
   so the names share one column two in from the edge — the same column the

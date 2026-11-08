@@ -148,11 +148,12 @@ expect_lacks "$overlay" -E '[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{2}:[0-9]{2}:[0-9]{2
 expect_lacks "$returned" -F "T R A N S C R I P T" "Ctrl+O did not return to the conversation"
 # ---- drive: Phase 4 ----
 # the slash-command palette. Typing "/" opens the command list below
-# the box, capped at 8 rows (/quit, the registry's last, starts off-window); ↑
-# wraps the selection to the last row and the window scrolls /quit in; four
-# more ↑ walk the highlight back to the band's middle row, where it stays while
-# the list scrolls under it (centered_window_rows, the /model list's rule), so
-# /quit scrolls back out below; walking back to the top and pressing Enter
+# the box, capped at 5 rows over a `(1/N)` counter (/quit, the registry's last,
+# starts off-window); ↑ wraps the selection to the last row and the window
+# scrolls /quit in, the counter reading `(N/N)`; three more ↑ walk the
+# highlight back to the band's middle row, where it stays while the list
+# scrolls under it (centered_window_rows, the /model list's rule), so /quit
+# scrolls back out below; walking back to the top and pressing Enter
 # runs /clear, the registry's first command (there is no /help — the palette
 # is the list).
 # Clear the leftover "AAA\nBBB" draft from Phase 2 first — the palette only opens
@@ -174,7 +175,7 @@ printf '%s\n' "$palette_open"
 # feature's new command to break (docs/settings.md's /settings, then
 # docs/hooks-menu.md's /hooks, then docs/skills.md's /skills each broke the
 # old counted walk; the over-press-↓-and-clamp idiom that replaced it died
-# with the clamp — 40 ↓ now land at 40 % n). The 8-row window follows the
+# with the clamp — 40 ↓ now land at 40 % n). The 5-row window follows the
 # selection, so the top rows leave and /quit scrolls in — on the bottom row,
 # the list having run out below it.
 tmux send-keys -t "$S" Up
@@ -183,7 +184,7 @@ palette_scrolled="$(tmux capture-pane -t "$S" -p)"
 echo "==== captured pane (slash palette scrolled to /quit) ===="
 printf '%s\n' "$palette_scrolled"
 
-# Four more ↑ walk the highlight up to the band's middle row, and from there
+# Three more ↑ walk the highlight up to the band's middle row, and from there
 # the window scrolls with it, keeping the commands below it in view — so the
 # tail (/quit) leaves at the bottom. The edge-pinned window this replaced kept
 # the highlight on the bottom row the whole way, scrolling the list up with it
@@ -192,18 +193,18 @@ printf '%s\n' "$palette_scrolled"
 # `→ ` marker opens (the selection also lights up cyan and bolds its name; the
 # other rows open on the marker's two-space inset), so a plain capture shows
 # it.
-for _ in 1 2 3 4; do
+for _ in 1 2 3; do
 	tmux send-keys -t "$S" Up
 done
 sleep 0.3
 palette_recentered="$(tmux capture-pane -t "$S" -p)"
-echo "==== captured pane (slash palette recentered, four up from /quit) ===="
+echo "==== captured pane (slash palette recentered, three up from /quit) ===="
 printf '%s\n' "$palette_recentered"
 
-# Back to the top the same way — four ↓ return to /quit and one more wraps to
+# Back to the top the same way — three ↓ return to /quit and one more wraps to
 # row 0 (the window follows the selection up again) so Enter runs /clear, not
 # /quit.
-for _ in 1 2 3 4 5; do
+for _ in 1 2 3 4; do
 	tmux send-keys -t "$S" Down
 done
 sleep 0.3
@@ -226,12 +227,13 @@ tmux send-keys -t "$S" C-c
 sleep 0.2
 
 # Typing "/" lists the commands below the box (their descriptions are unique to
-# the open palette) — the first 8 only, MENU_MAX_ROWS being the cap; everything
+# the open palette) — the first 5 only, MENU_MAX_ROWS being the cap, over the
+# dim `(n/N)` counter that says where the highlight sits among all N; everything
 # past that starts off-window and ↓ scrolls it in. The assertions below name
 # commands by position-independent facts (the registry's first two entries,
 # /quit is its last) rather than by ordinal — and the CAP itself is asserted
 # by COUNTING the rows, not by naming whichever command happens to sit on the
-# eighth: this line once pinned "/login, the 8th command", and `/fast`
+# last one: this line once pinned "/login, the 8th command", and `/fast`
 # (docs/fast-mode.md) landing before it broke a check about MENU_MAX_ROWS for
 # a reason that had nothing to do with MENU_MAX_ROWS. A palette row opens on
 # the `→ ` marker or its two-space inset, then its slash, its name and two or
@@ -242,26 +244,35 @@ expect_has "$palette_open" -E '^→ /clear +Clear the conversation' "the highlig
 expect_has "$palette_open" -F "Copy the last response to the clipboard" "the command palette did not list /copy"
 expect_lacks "$palette_open" -E "${PALETTE_ROW}help " "the palette still lists /help"
 palette_rows="$(printf '%s\n' "$palette_open" | grep -cE "$PALETTE_ENTRY" || true)"
-if [ "$palette_rows" -ne 8 ]; then
-	fail "the command palette shows $palette_rows rows, not the 8 MENU_MAX_ROWS caps it at"
+if [ "$palette_rows" -ne 5 ]; then
+	fail "the command palette shows $palette_rows rows, not the 5 MENU_MAX_ROWS caps it at"
 fi
-expect_lacks "$palette_open" -F "Exit the app" "the palette shows /quit (the registry's last command) in its first window — the 8-row cap is gone"
+expect_lacks "$palette_open" -F "Exit the app" "the palette shows /quit (the registry's last command) in its first window — the 5-row cap is gone"
+# The counter under the window: `(1/N)` hanging under the names, N every
+# command. Read N off it, then hold the other frames to the same N.
+palette_total="$(printf '%s\n' "$palette_open" | sed -nE 's|^  \(1/([0-9]+)\)$|\1|p' | head -1)"
+if [ -z "$palette_total" ] || [ "$palette_total" -le "$palette_rows" ]; then
+	fail "the open palette shows no '(1/N)' counter under its five rows (or N=${palette_total:-none} is no more than the rows shown)"
+fi
 expect_has "$palette_scrolled" -F "Exit the app" "↓ to the last command did not scroll /quit into the palette window"
 expect_lacks "$palette_scrolled" -F "Clear the conversation" "the scrolled palette still shows /clear — the window did not move"
-# Walking back up from /quit recenters: the window still holds its 8 rows, the
-# highlight rides the middle (5th) one with commands below it, and /quit — four
+expect_has "$palette_scrolled" -E "^  \(${palette_total:-N}/${palette_total:-N}\)$" "the counter did not follow the highlight to the last command"
+# Walking back up from /quit recenters: the window still holds its 5 rows, the
+# highlight rides the middle (3rd) one with commands below it, and /quit — three
 # rows under the highlight — has scrolled out.
 recentered_rows="$(printf '%s\n' "$palette_recentered" | grep -cE "$PALETTE_ENTRY" || true)"
-if [ "$recentered_rows" -ne 8 ]; then
-	fail "the recentered command palette shows $recentered_rows rows, not 8"
+if [ "$recentered_rows" -ne 5 ]; then
+	fail "the recentered command palette shows $recentered_rows rows, not 5"
 fi
 highlight_row="$(printf '%s\n' "$palette_recentered" | grep -E "$PALETTE_ENTRY" | grep -n '^→ ' | cut -d: -f1)"
-if [ "$highlight_row" != 5 ]; then
-	fail "four ↑ from /quit left the palette highlight on row ${highlight_row:-none} of 8, not the middle (5th) row with commands below it"
+if [ "$highlight_row" != 3 ]; then
+	fail "three ↑ from /quit left the palette highlight on row ${highlight_row:-none} of 5, not the middle (3rd) row with commands below it"
 fi
-expect_lacks "$palette_recentered" -F "Exit the app" "four ↑ from /quit left it in view — the window did not scroll with the highlight once it reached the middle row"
+expect_lacks "$palette_recentered" -F "Exit the app" "three ↑ from /quit left it in view — the window did not scroll with the highlight once it reached the middle row"
+expect_has "$palette_recentered" -E "^  \($((${palette_total:-4} - 3))/${palette_total:-N}\)$" "the counter does not name the recentered highlight's place, three up from the last"
 # The open palette DISPLACES the session footer (codex's popups take its row).
 expect_lacks "$palette_open" -F "dummy_model_name" "the session footer is still shown while the palette is open (the band must displace it)"
 expect_has "$palette_top" -E '^→ /clear +Clear the conversation' "↓ past /quit did not wrap the palette highlight back to /clear"
+expect_has "$palette_top" -E "^  \(1/${palette_total:-N}\)$" "the counter did not wrap back to (1/N) with the highlight"
 expect_lacks "$clear_ran" -F "❯ $USER_MSG" "Enter on the palette's top row did not run /clear — the conversation is still there"
 expect_has "$clear_ran" -F "dummy_model_name ·" "the idle input box + footer did not reseat after running /clear from the palette"

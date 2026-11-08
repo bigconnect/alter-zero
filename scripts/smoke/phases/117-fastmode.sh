@@ -152,9 +152,9 @@ launch -c "$T_DIR" "$S117B" 100 30 "env NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 AL
 # open palette re-derives its rows as it lands.
 type_text "$S117B" "/"
 # The palette's window is MENU_MAX_ROWS deep and the registry has outgrown
-# it (docs/design.md), so a bare `/` shows the first eight rows and the tier
+# it (docs/design.md), so a bare `/` shows the first five rows and the tier
 # rows spliced after /model need not be among them — which command sits
-# eighth is an accident of the registry's length, not the thing under test.
+# fifth is an accident of the registry's length, not the thing under test.
 # Walk the selection down until the tiers are in the window instead: the
 # window keeps the selection centered (`centered_window_rows`), so each step
 # past the middle row scrolls one new row in at the band's bottom edge, /fast

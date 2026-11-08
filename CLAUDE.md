@@ -3617,7 +3617,9 @@ live in the pure `file_search` module, and the `/resume` primitives
 Typing a bare `/token` opens a **slash-command palette** below the input box (a
 third live-region band): `App::command_menu` holds the highlight, the registry
 `app::COMMANDS` (`SlashCommand { name, description, effect }` — currently
-`/clear`, `/copy`, `/export`, `/init`, `/compact`, `/context`, `/usage`, `/resume`, `/model`, `/login`, `/settings`, `/theme`, `/mascot`, `/spinner`, `/hooks`, `/skills`, `/mcp`, `/donate`, `/secrets`, and `/quit` — plus, right after `/model`, one row per speed tier the active model lists, `/fast`, `/ultrafast`, built from the listing by `App::commands` rather than registered, `docs/fast-mode.md`) is filtered by `matching_commands`, and ↑/↓ scroll / Tab+Enter run
+`/clear`, `/copy`, `/export`, `/init`, `/compact`, `/context`, `/usage`, `/resume`, `/model`, `/login`, `/settings`, `/theme`, `/mascot`, `/spinner`, `/hooks`, `/skills`, `/mcp`, `/donate`, `/secrets`, and `/quit` — plus, right after `/model`, one row per speed tier the active model lists, `/fast`, `/ultrafast`, built from the listing by `App::commands` rather than registered, `docs/fast-mode.md`) is filtered by `matching_commands`, shown five rows at a time
+(`MENU_MAX_ROWS`) over a dim `(n/total)` counter saying where the highlight sits
+among every match, and ↑/↓ scroll / Tab+Enter run
 the highlighted command. Descriptions line up in a column, and the selection
 wears the `@`/`$` pickers' **`→ ` marker** (`MENU_MARKER`; every other row opens
 on `MENU_INDENT`, its width in spaces, so the names share one column) and lights
@@ -3791,7 +3793,8 @@ but bug fixes still get a failing test first (TDD applies to fixes too).
   something to pick opens its rows on (its placeholder rows on the inset), the
   `MENU_DESC_COL` description column, the cyan/dimmed colours that light up the
   whole selected row — name and description alike — and the `MENU_MAX_ROWS`
-  cap), the `@` file
+  (5) row budget the dim `(n/total)` counter row (`menu_counter_line`) hangs
+  under), the `@` file
   picker (`FILE_MENU_*` — it reuses the palette's `menu_selected_color()`/
   `menu_dim_color()`, additionally bolding the query-matched characters; the
   columned row geometry is the palette's `MENU_MARKER`/`MENU_INDENT` (the

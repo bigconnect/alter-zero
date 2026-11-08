@@ -5,8 +5,8 @@ use super::*;
 use crate::ui::theme::{
     FILE_MENU_MAX_ROWS, FOOTER_INDENT, MENU_DESC_COL, MENU_INDENT, MENU_MARKER, MENU_MAX_ROWS,
     SHORTCUTS, SHORTCUTS_BACKTRACK, SHORTCUTS_INTERRUPT, SHORTCUTS_MAX_GUTTER,
-    SHORTCUTS_MIN_GUTTER, SHORTCUTS_MIN_ROWS, SKILL_MENU_MAX_ROWS, menu_selected_color,
-    shortcuts_key_color, shortcuts_text_color,
+    SHORTCUTS_MIN_GUTTER, SHORTCUTS_MIN_ROWS, SKILL_MENU_MAX_ROWS, menu_dim_color,
+    menu_selected_color, shortcuts_key_color, shortcuts_text_color,
 };
 use crate::ui::wrap::cols;
 
@@ -79,38 +79,105 @@ fn command_rows(lines: &[Line<'_>]) -> Vec<String> {
         .collect()
 }
 
+/// The palette's window rows and the `(n/total)` counter under them — the
+/// band's last row whenever a command matches.
+fn split_counter<'a, 'b>(lines: &'a [Line<'b>]) -> (&'a [Line<'b>], &'a Line<'b>) {
+    let (counter, window) = lines.split_last().expect("a counter row");
+    (window, counter)
+}
+
+/// The counter row's text: `(n/total)` hanging under the names.
+fn counter_text(selected: usize, total: usize) -> String {
+    format!("{MENU_INDENT}({}/{total})", selected + 1)
+}
+
 #[test]
 fn menu_rows_is_zero_when_the_palette_is_closed() {
     assert_eq!(menu_rows(&App::new(), 60), 0);
 }
 
 #[test]
-fn the_palette_shows_at_most_eight_commands() {
-    // The requested cap (the file picker's): a bare `/` shows the first eight
-    // commands and longer match lists scroll (centered_window_rows) instead of
-    // growing the band — the registry has outgrown the window, so /quit (the
-    // last) starts off-window (smoke.sh Phase 4 asserts the same on the real
-    // binary). The cap counts **commands**, not rows: a wrapped description's
-    // continuation rows ride under their command without costing a slot.
-    assert_eq!(MENU_MAX_ROWS, 8, "the requested cap");
+fn the_palette_shows_at_most_five_commands() {
+    // The requested cap: a bare `/` shows the first five commands over the
+    // `(n/total)` counter, and longer match lists scroll
+    // (centered_window_rows) instead of growing the band — the registry has
+    // outgrown the window, so /quit (the last) starts off-window (smoke.sh
+    // Phase 1 asserts the same on the real binary). The cap is a **row
+    // budget**: a wrapped description's continuation rows cost window rows
+    // (the narrow test below), and the counter rides under it.
+    assert_eq!(MENU_MAX_ROWS, 5, "the requested cap");
+    let total = crate::app::COMMANDS.len();
     assert!(
-        crate::app::COMMANDS.len() > MENU_MAX_ROWS as usize,
+        total > MENU_MAX_ROWS as usize,
         "the registry outgrew the window — scrolling is exercised by a bare `/`"
     );
     // At the standard 80 columns every (concise) description fits its row, so
-    // the row budget shows exactly eight one-row commands — the smoke pane.
+    // the row budget shows exactly five one-row commands — the smoke pane.
     let lines = command_menu_lines(&palette("/", 0), 80);
-    let texts = command_rows(&lines);
+    let (window, counter) = split_counter(&lines);
+    let texts = command_rows(window);
     assert_eq!(texts.len(), MENU_MAX_ROWS as usize, "{texts:?}");
     assert_eq!(
-        lines.len(),
+        window.len(),
         texts.len(),
         "one row per command at 80 columns"
     );
     assert!(texts[0].contains("/clear"), "{texts:?}");
     assert!(
         !texts.iter().any(|t| t.contains("/quit")),
-        "the ninth command starts off-window: {texts:?}"
+        "everything past the fifth command starts off-window: {texts:?}"
+    );
+    assert_eq!(plain(counter), counter_text(0, total));
+}
+
+#[test]
+fn the_palette_counts_the_highlight_among_every_match() {
+    // Five rows show a fraction of the registry, so the band says where the
+    // highlight sits among every match and how many there are: `(n/total)`
+    // under the window — the pickers' counter in the band's dress, hanging
+    // under the names at MENU_INDENT, dim like an unselected row.
+    let total = palette("/", 0).commands().len();
+    for selected in [0, 1, total / 2, total - 1] {
+        let lines = command_menu_lines(&palette("/", selected), 80);
+        let (_, counter) = split_counter(&lines);
+        assert_eq!(plain(counter), counter_text(selected, total));
+        assert!(
+            counter
+                .spans
+                .iter()
+                .filter(|s| !s.content.trim().is_empty())
+                .all(|s| s.style.fg == Some(menu_dim_color())),
+            "the counter is dim: {counter:?}"
+        );
+    }
+    // A query counts its own matches, every one of them in view…
+    let commands = palette("/", 0).commands();
+    let co = crate::app::matching_commands(&commands, "co").len();
+    assert!(co > 1 && co <= MENU_MAX_ROWS as usize, "{co} /co matches");
+    let lines = command_menu_lines(&palette("/co", 1), 80);
+    let (window, counter) = split_counter(&lines);
+    assert_eq!(command_rows(window).len(), co);
+    assert_eq!(plain(counter), counter_text(1, co));
+    // …and a miss has nothing to count: its placeholder stands alone.
+    let miss = command_menu_lines(&palette("/zzz", 0), 80);
+    assert_eq!(miss.len(), 1, "{miss:?}");
+}
+
+#[test]
+fn a_degenerate_width_cuts_the_counter_like_a_name() {
+    // Every row of the band fits the width, the counter included: it is
+    // `…`-cut to the room past its inset, the way a name is.
+    let total = palette("/", 0).commands().len();
+    let lines = command_menu_lines(&palette("/", 0), 7);
+    for line in &lines {
+        assert!(cols(plain(line).trim_end()) <= 7, "{:?}", plain(line));
+    }
+    let (_, counter) = split_counter(&lines);
+    let text = plain(counter);
+    assert!(text.ends_with('…'), "{text:?}");
+    assert!(
+        counter_text(0, total).starts_with(text.trim_end_matches('…')),
+        "{text:?}"
     );
 }
 
@@ -122,13 +189,14 @@ fn the_palette_scrolls_down_to_the_last_command() {
     // row to the bottom one, cyan.
     let last = crate::app::COMMANDS.len() - 1;
     let lines = command_menu_lines(&palette("/", last), 80);
-    let texts = command_rows(&lines);
+    let (window, counter) = split_counter(&lines);
+    let texts = command_rows(window);
     assert_eq!(texts.len(), MENU_MAX_ROWS as usize);
     assert!(
         !texts.iter().any(|t| t.contains("/clear")),
         "the first command scrolled out: {texts:?}"
     );
-    let bottom = lines.last().expect("a windowed row");
+    let bottom = window.last().expect("a windowed row");
     assert!(plain(bottom).contains("/quit"), "{texts:?}");
     assert!(
         bottom
@@ -136,6 +204,11 @@ fn the_palette_scrolls_down_to_the_last_command() {
             .iter()
             .any(|s| s.style.fg == Some(menu_selected_color())),
         "the selection rode the window down"
+    );
+    assert_eq!(
+        plain(counter),
+        counter_text(last, last + 1),
+        "the last of all"
     );
 }
 
@@ -167,7 +240,8 @@ fn the_palette_keeps_the_highlight_centered_as_it_scrolls() {
     assert!(len > max, "the registry outgrew the window: {len} commands");
     for selected in 0..len {
         let lines = command_menu_lines(&palette("/", selected), 80);
-        assert_eq!(lines.len(), max, "a full window at {selected}");
+        let (window, counter) = split_counter(&lines);
+        assert_eq!(window.len(), max, "a full window at {selected}");
         let expected = if selected < middle {
             selected // anchored at the top, still walking down to the middle
         } else if selected + (max - middle - 1) >= len {
@@ -176,35 +250,61 @@ fn the_palette_keeps_the_highlight_centered_as_it_scrolls() {
             middle
         };
         assert_eq!(
-            highlighted_row(&lines),
+            highlighted_row(window),
             expected,
             "selection {selected}: {:?}",
-            command_rows(&lines)
+            command_rows(window)
         );
+        assert_eq!(plain(counter), counter_text(selected, len));
     }
 }
 
 #[test]
-fn the_wrapped_palette_keeps_a_command_on_each_side_of_the_highlight() {
+fn the_wrapped_palette_keeps_a_command_beside_the_highlight_wherever_one_fits() {
     // Where descriptions wrap the band shows fewer, taller entries, and the
-    // window centers the highlight by *rows*. At 60 columns every entry is
-    // one or two rows, so three always fit the eight-row budget and the
-    // highlight never sits on the band's edge while a command remains on
-    // that side. The edge-pinned window filled the band from the highlight
-    // upward and left nothing below it.
-    let len = palette("/", 0).commands().len();
+    // window centers the highlight by *rows*: it never sits on the band's
+    // edge while the command on that side would still fit the budget. Five
+    // rows can't always hold three entries — two two-row entries leave no
+    // room for a third — so where one is missing, it is the one that would
+    // not have fit. The edge-pinned window filled the band from the
+    // highlight upward and left nothing below it even when it fit.
+    let width = 60;
+    let commands = palette("/", 0).commands();
+    let len = commands.len();
+    let max = MENU_MAX_ROWS as usize;
+    // An entry's own rows: its full name matches it alone.
+    let rows_of = |i: usize| {
+        let lines = command_menu_lines(&palette(&format!("/{}", commands[i].name), 0), width);
+        split_counter(&lines).0.len()
+    };
+    let mut flanked = 0;
     for selected in 1..len - 1 {
-        let lines = command_menu_lines(&palette("/", selected), 60);
-        assert!(lines.len() <= MENU_MAX_ROWS as usize, "{lines:?}");
-        let row = highlighted_row(&lines);
-        let above = command_rows(&lines[..row]).len();
-        let below = command_rows(&lines[row + 1..]).len();
-        assert!(
-            above >= 1 && below >= 1,
-            "selection {selected}: {above} above, {below} below: {:?}",
-            command_rows(&lines)
-        );
+        let lines = command_menu_lines(&palette("/", selected), width);
+        let (window, _) = split_counter(&lines);
+        assert!(window.len() <= max, "{window:?}");
+        let row = highlighted_row(window);
+        let above = command_rows(&window[..row]).len();
+        let below = command_rows(&window[row + 1..]).len();
+        if above == 0 {
+            assert!(
+                window.len() + rows_of(selected - 1) > max,
+                "selection {selected}: the command above fit, yet none shows: {:?}",
+                command_rows(window)
+            );
+        }
+        if below == 0 {
+            assert!(
+                window.len() + rows_of(selected + 1) > max,
+                "selection {selected}: the command below fit, yet none shows: {:?}",
+                command_rows(window)
+            );
+        }
+        flanked += usize::from(above >= 1 && below >= 1);
     }
+    assert!(
+        flanked > 0,
+        "the highlight is never flanked at {width} columns"
+    );
 }
 
 #[test]
@@ -230,7 +330,8 @@ fn the_palette_wraps_a_long_description_instead_of_clipping() {
     // now word-wraps onto continuation rows indented to the description
     // column, so nothing is lost at narrow widths.
     let app = palette("/copy", 0);
-    let lines = command_menu_lines(&app, 40); // room for 13 desc columns
+    let band = command_menu_lines(&app, 40); // room for 13 desc columns
+    let (lines, _) = split_counter(&band);
     assert!(lines.len() > 1, "the description wrapped: {lines:?}");
     assert!(
         plain(&lines[0]).starts_with("→ /copy"),
@@ -238,7 +339,7 @@ fn the_palette_wraps_a_long_description_instead_of_clipping() {
         plain(&lines[0])
     );
     // Every row fits the width…
-    for line in &lines {
+    for line in lines {
         assert!(cols(plain(line).trim_end()) <= 40, "{:?}", plain(line));
     }
     // …the continuation rows start at the description column…
@@ -329,12 +430,13 @@ fn the_narrow_palette_windows_fewer_commands_inside_the_row_budget() {
     // what keeps the input box's rows (and the cursor) untouched on a short
     // terminal.
     let lines = command_menu_lines(&palette("/", 0), 40);
+    let (window, _) = split_counter(&lines);
     assert!(
-        lines.len() <= MENU_MAX_ROWS as usize,
+        window.len() <= MENU_MAX_ROWS as usize,
         "the band held its budget: {} rows",
-        lines.len()
+        window.len()
     );
-    let cmds = command_rows(&lines);
+    let cmds = command_rows(window);
     assert!(cmds[0].contains("/clear"), "{cmds:?}");
     assert!(
         cmds.len() < MENU_MAX_ROWS as usize,
@@ -343,9 +445,10 @@ fn the_narrow_palette_windows_fewer_commands_inside_the_row_budget() {
     // Scrolled to the last command it is still the window's bottom entry.
     let last = crate::app::COMMANDS.len() - 1;
     let scrolled = command_menu_lines(&palette("/", last), 40);
-    assert!(scrolled.len() <= MENU_MAX_ROWS as usize);
+    let (window, _) = split_counter(&scrolled);
+    assert!(window.len() <= MENU_MAX_ROWS as usize);
     assert!(
-        command_rows(&scrolled)
+        command_rows(window)
             .last()
             .expect("a command row")
             .contains("/quit"),
@@ -447,9 +550,10 @@ fn wrapped_continuation_rows_share_the_selection_colour() {
     // The whole highlighted row lights up cyan — its continuation rows
     // included, so a wrapped selected description reads as one entry.
     let app = palette("/copy", 0);
-    let lines = command_menu_lines(&app, 40);
+    let band = command_menu_lines(&app, 40);
+    let (lines, _) = split_counter(&band);
     assert!(lines.len() > 1, "the description wrapped: {lines:?}");
-    for line in &lines {
+    for line in lines {
         assert!(
             line.spans
                 .iter()
@@ -479,8 +583,9 @@ fn command_menu_aligns_descriptions_in_a_column() {
     // starts at the same column, regardless of command-name length or which
     // row is selected; a wrapped description's continuation rows indent to
     // that same column. The description is each row's last span.
-    let lines = command_menu_lines(&palette("/", 0), 60);
-    for line in &lines {
+    let band = command_menu_lines(&palette("/", 0), 60);
+    let (lines, _) = split_counter(&band);
+    for line in lines {
         let (_desc, before) = line.spans.split_last().expect("a non-empty row");
         let before_desc: usize = before.iter().map(|s| cols(s.content.as_ref())).sum();
         assert_eq!(
@@ -508,7 +613,8 @@ fn the_palette_marks_the_selection_with_an_arrow() {
     // command opens on `→ `, every other row on the marker's width of
     // spaces, so the names share one column and the selection still reads
     // where the cyan alone says nothing (a monochrome terminal, a capture).
-    let lines = command_menu_lines(&palette("/", 1), 80);
+    let band = command_menu_lines(&palette("/", 1), 80);
+    let (lines, _) = split_counter(&band);
     let texts: Vec<String> = lines.iter().map(plain).collect();
     assert!(texts[1].starts_with("→ /copy "), "{texts:?}");
     for (i, text) in texts.iter().enumerate().filter(|&(i, _)| i != 1) {
