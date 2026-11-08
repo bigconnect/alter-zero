@@ -227,6 +227,12 @@ agent session view holds the viewed agent's thought the same way
   rows, and e97ef69's — the rows held with the thought's text in them, before
   the newest-record rule and the retry fix — all four: the lingering text in
   the first three, the lost line in the fourth.
-- Real provider: the reported prompt on ClinePass at 100×30, 80×24 and 80×14
-  — no hop at the thought → `skill` hand-off, and exactly one blank row above
-  the status line in every mid-turn frame.
+- Real provider, ClinePass's `deepseek-v4.1-flash-1017`: with the thought's
+  text kept in the held rows, the reported prompt at 100×30, 80×24 and 80×14
+  — no hop at the thought → `skill` hand-off. With the rows emptied, three
+  more turns (the reported prompt at 100×30 and 80×24, and one asking for
+  thought before a `bash` call): no hop, the thought's text never under its
+  settled line, and the empty rows on screen 9–20 ms at each of the four
+  hand-offs — a single frame. Past those, one blank row above the status
+  line in every mid-turn frame but one, where a reply's own blank lines
+  before a code block were its frontier.
