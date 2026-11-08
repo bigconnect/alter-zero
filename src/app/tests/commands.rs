@@ -1,5 +1,5 @@
-//! The slash-command palette and its effects (`/help`, `/clear`, `/copy`,
-//! `/init` — `docs/init.md`).
+//! The slash-command palette and its effects (`/clear`, `/copy`, `/init` —
+//! `docs/init.md`).
 
 use super::*;
 
@@ -26,16 +26,16 @@ fn a_slash_closes_the_band_and_opens_the_palette() {
 #[test]
 fn command_query_detects_a_bare_slash_token() {
     assert_eq!(command_query("/"), Some(""));
-    assert_eq!(command_query("/he"), Some("he"));
-    assert_eq!(command_query("/help"), Some("help"));
+    assert_eq!(command_query("/cl"), Some("cl"));
+    assert_eq!(command_query("/clear"), Some("clear"));
 }
 
 #[test]
 fn command_query_is_none_for_non_command_input() {
     assert_eq!(command_query(""), None);
     assert_eq!(command_query("hello"), None);
-    assert_eq!(command_query("ask /help"), None); // not at the start
-    assert_eq!(command_query("/help me"), None); // past a space → args, not a token
+    assert_eq!(command_query("ask /clear"), None); // not at the start
+    assert_eq!(command_query("/clear me"), None); // past a space → args, not a token
     assert_eq!(command_query("/a\nb"), None); // a newline ends the token too
 }
 
@@ -111,16 +111,34 @@ fn palette_descriptions_are_concise_and_product_name_free() {
 }
 
 #[test]
+fn help_is_not_a_command() {
+    // The palette lists every command itself, so /help's notice only
+    // repeated it. A typed `/help` now matches nothing: the palette shows
+    // its placeholder and Enter is swallowed like any other miss, the
+    // draft kept.
+    assert!(
+        COMMANDS.iter().all(|c| c.name != "help"),
+        "/help is no longer a command"
+    );
+    let mut app = App::new();
+    type_str(&mut app, "/help");
+    assert!(app.command_menu.is_some(), "the palette is open");
+    assert!(app.highlighted_command().is_none(), "nothing matches /help");
+    assert_eq!(app.on_key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(app.input.text(), "/help", "the draft stays");
+}
+
+#[test]
 fn matching_commands_filters_by_name_prefix_case_insensitively() {
     assert_eq!(
         matching_commands(COMMANDS, "").len(),
         COMMANDS.len(),
         "an empty query lists everything"
     );
-    let hits = matching_commands(COMMANDS, "HE");
-    assert!(hits.iter().any(|c| c.name == "help"));
+    let hits = matching_commands(COMMANDS, "CO");
+    assert!(hits.iter().any(|c| c.name == "copy"));
     assert!(
-        hits.iter().all(|c| c.name.starts_with("he")),
+        hits.iter().all(|c| c.name.starts_with("co")),
         "every match shares the prefix"
     );
 }
@@ -214,12 +232,12 @@ fn slash_init_submits_the_canned_prompt_when_idle() {
 fn opening_the_search_closes_the_palette_and_canceling_keeps_it_closed() {
     let mut app = searchable_app(&["git status"]);
     app.input = TextArea::new();
-    type_query(&mut app, "/he"); // typing a bare /token opens the palette
+    type_query(&mut app, "/cl"); // typing a bare /token opens the palette
     assert!(app.command_menu.is_some());
     app.on_key(ctrl('r'));
     assert!(app.command_menu.is_none(), "search owns the keys");
     app.on_key(key(KeyCode::Esc));
-    assert_eq!(app.input.text(), "/he");
+    assert_eq!(app.input.text(), "/cl");
     assert!(app.command_menu.is_none(), "cancel restores the draft only");
 }
 
@@ -227,11 +245,11 @@ fn opening_the_search_closes_the_palette_and_canceling_keeps_it_closed() {
 fn a_previewed_slash_token_does_not_open_the_palette_but_accepting_does() {
     let mut app = App::new();
     // A bare /token can enter the history via Ctrl+C's composer-clear.
-    app.input = TextArea::from_text("/help");
+    app.input = TextArea::from_text("/clear");
     app.on_key(ctrl('c'));
     app.on_key(ctrl('r'));
-    type_query(&mut app, "help");
-    assert_eq!(app.input.text(), "/help");
+    type_query(&mut app, "clear");
+    assert_eq!(app.input.text(), "/clear");
     assert!(app.command_menu.is_none(), "previews never pop the palette");
     app.on_key(key(KeyCode::Enter));
     assert!(
@@ -462,33 +480,4 @@ fn a_tier_command_works_mid_turn_for_the_next_turn() {
         Action::SetSpeed(Some(fast_tier()))
     );
     assert!(app.turn_active(), "the turn keeps running underneath");
-}
-
-#[test]
-fn slash_help_lists_the_tier_commands_where_the_palette_shows_them() {
-    // /help enumerates what the palette offers this session — the tier rows
-    // included, right after /model, each with its own description.
-    let mut app = App::new();
-    app.set_speed(two_tiers());
-    type_chars(&mut app, "/help");
-    let Action::Notice(text) = app.on_key(key(KeyCode::Enter)) else {
-        panic!("/help commits a notice when idle");
-    };
-    let lines: Vec<&str> = text.lines().collect();
-    let model = lines
-        .iter()
-        .position(|l| l.starts_with("/model — "))
-        .expect("/model listed");
-    assert_eq!(lines[model + 1], "/fast — 1.5x speed, increased usage");
-    assert_eq!(
-        lines[model + 2],
-        "/ultrafast — The fastest available responses."
-    );
-    // …and a model listing none lists none.
-    let mut plain = App::new();
-    type_chars(&mut plain, "/help");
-    let Action::Notice(text) = plain.on_key(key(KeyCode::Enter)) else {
-        panic!("/help commits a notice when idle");
-    };
-    assert!(!text.contains("/fast"), "{text}");
 }

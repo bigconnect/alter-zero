@@ -32,19 +32,19 @@ there" and fades it after a few seconds.
 | `/login` key saved | `Saved {ENV} — run /model to use {provider}` | info |
 | `/login` write fails | `Couldn't write {path}: {e}` | error |
 | `/resume` run mid-turn | `/resume is disabled while a task is in progress` | info |
-| `/help` run mid-turn | `/help is disabled while a task is in progress` | info |
 | `/init` run mid-turn | `/init is disabled while a task is in progress` | info |
 | `/compact` run mid-turn | `/compact is disabled while a task is in progress` | info |
 | `/compact` with an empty context | `Nothing to compact` | info |
 
-The original rows (`/copy`, `/model`, `/login`, `/resume`, `/help`) were all
+The original rows (`/copy`, `/model`, `/login`, `/resume`) were all
 committed as scrollback messages before this design; the later `/init` and
 `/compact` rows were born as toasts. Either way they surface as toasts and
 leave no trace in `history` (so they never appear in the Ctrl+O
-transcript or a `/resume` rollout). The one thing that *stays* in scrollback is
-**idle `/help`** — its multi-line command list is real content the user wants to
-scroll, so it commits as a `Role::System` message as before. Only `/help`
-*mid-turn* becomes the toast rejection above.
+transcript or a `/resume` rollout). `/help` used to be the exception: idle, its
+multi-line command list committed as a `Role::System` message, and only
+mid-turn did it become a toast rejection. It is gone — the palette lists every
+command itself — and a typed `/help` now matches nothing, like any other
+unknown command.
 
 ## `/model` and `/login` now work mid-turn
 
@@ -93,7 +93,7 @@ pub struct Toast { pub text: String, pub kind: ToastKind }
 nothing lingering.
 
 The slash-command dispatch returns `Action::Toast(String)` for the palette's
-soft rejections — the mid-turn busy notices (`/resume`, `/help`, `/init`,
+soft rejections — the mid-turn busy notices (`/resume`, `/init`,
 `/compact`) and the commands that find nothing to act on yet: `/compact`'s
 `Nothing to compact`, `/export`'s `Nothing to export` and `/copy`'s
 `No agent response to copy`. The boundary shows every `Action::Toast` as an

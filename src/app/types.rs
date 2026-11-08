@@ -17,8 +17,8 @@ pub enum Role {
     /// A backend error notice (e.g. a real model failed mid-reply). Rendered like
     /// a message so it flows into scrollback and repaints on resize uniformly.
     Error,
-    /// A system notice produced by a slash command (e.g. `/help`'s command list,
-    /// or a stub's "not wired up yet" placeholder). Rendered like a message — a
+    /// A one-off system notice (e.g. a bare `!`'s "type a command" hint, or a
+    /// stub's "not wired up yet" placeholder). Rendered like a message — a
     /// distinct bullet colour — so it flows into scrollback and repaints uniformly.
     System,
     /// A `!` shell command the user ran — the header line of its cell, rendered

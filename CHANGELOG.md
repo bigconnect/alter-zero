@@ -160,6 +160,13 @@ release heading when a version is cut.
   context you are reading. Tab's page, with what the auto-mode classifier
   reads, has the same look.
 
+### Removed
+
+- **`/help`.** It printed the list of commands that typing `/` already
+  shows, with their descriptions, in the palette under the input box. The
+  palette now opens on `/clear`, and a typed `/help` matches nothing, like
+  any other unknown command.
+
 ### Fixed
 
 - **The input box no longer jumps when a thought hands over to a tool
