@@ -110,16 +110,18 @@ pub(super) fn preview_lines(
 ) -> Vec<Line<'static>> {
     let rows = usize::from(rows);
     // A thought that just settled, held on its block's rows until the next
-    // cell takes them — its settled line over the empty rows its thought
-    // stood on, which `strip_lines` draws under the status line instead, the
-    // line kept on a squeezed slot (docs/thought-handoff.md). `preview_rows`
-    // sizes the same branch first.
+    // cell takes them: for a moment the live block as it was, then its
+    // settled line over the empty rows its thought stood on, which
+    // `strip_lines` draws under the status line instead — the head kept on a
+    // squeezed slot (docs/thought-handoff.md). `preview_rows` sizes the same
+    // branch first.
     if let Some(thought) = super::layout::held_thought_on_screen(app) {
-        return trim_preview(
-            super::reasoning::held_thought_lines(thought, width),
-            rows,
-            false,
-        );
+        let held = if super::layout::held_block_on_screen(app).is_some() {
+            live_reasoning_lines(&thought.text, app.pulse(), width)
+        } else {
+            super::reasoning::held_thought_lines(thought, width)
+        };
+        return trim_preview(held, rows, false);
     }
     if let Some(run) = app.viewed_agent() {
         // The viewed agent's own strip — fed the same boundary-built frontier
@@ -445,7 +447,10 @@ pub(super) fn strip_lines(
     // status line, then the spare rows down to the composer
     // (docs/thought-handoff.md). The count is unchanged, so every geometry
     // that sized the slot still agrees.
-    let spare = if has_status && super::layout::held_thought_on_screen(app).is_some() {
+    let spare = if has_status
+        && super::layout::held_thought_on_screen(app).is_some()
+        && super::layout::held_block_on_screen(app).is_none()
+    {
         lines.split_off(lines.len().min(1))
     } else {
         Vec::new()
@@ -469,18 +474,27 @@ pub(super) fn strip_lines(
         // spinner style (`/spinner`, docs/spinner.md). A blank row stands
         // in if the status somehow went while `has_status` said otherwise,
         // so the count still matches `strip_rows`' STATUS_ROWS.
+        //
+        // A settled thought still showing its block keeps the block's timer
+        // too: the `Thinking for Ns` clause, frozen at the phase's length,
+        // goes in the frame the block does (docs/thought-handoff.md).
+        let held_clause = super::layout::held_block_on_screen(app)
+            .map(|thought| Duration::from_secs(thought.secs));
         let line = if let Some(run) = app.viewed_agent() {
-            Some(styled_status_line(
-                &agent_view_status(run),
-                None,
-                app.spinner(),
-                width,
-            ))
+            let mut status = agent_view_status(run);
+            status.thinking = status.thinking.or(held_clause);
+            Some(styled_status_line(&status, None, app.spinner(), width))
         } else {
             // While some task is in progress the spinner wears its
             // activeForm instead of the turn's verb (docs/task-tools.md).
-            app.status()
-                .map(|status| styled_status_line(status, app.task_verb(), app.spinner(), width))
+            app.status().map(|status| match held_clause {
+                Some(clause) if status.thinking.is_none() => {
+                    let mut status = status.clone();
+                    status.thinking = Some(clause);
+                    styled_status_line(&status, app.task_verb(), app.spinner(), width)
+                }
+                _ => styled_status_line(status, app.task_verb(), app.spinner(), width),
+            })
         };
         lines.push(line.unwrap_or_default());
         // The rows hanging off the status line, in `hang_rows`' sum: the

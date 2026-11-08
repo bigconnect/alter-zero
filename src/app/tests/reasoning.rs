@@ -280,6 +280,31 @@ fn a_held_thought_is_kept_until_it_is_dropped() {
 }
 
 #[test]
+fn a_held_thoughts_age_runs_on_the_frame_clock_from_its_hold() {
+    // The strip keeps a settled thought's live block up for a moment only
+    // (docs/thought-handoff.md), so `App` keeps when it was held — the frame
+    // clock's reading, the spinner picker's rule — and reports how long it
+    // has stood since.
+    let mut app = App::new();
+    app.begin_stream();
+    app.begin_reasoning();
+    app.push_thinking("the plan");
+    let thought = app.finish_reasoning(0).expect("a thought");
+    assert_eq!(app.held_thought_age(), None, "nothing held, no age");
+    app.set_pulse(Duration::from_secs(90));
+    app.hold_thought(thought);
+    assert_eq!(app.held_thought_age(), Some(Duration::ZERO));
+    app.set_pulse(Duration::from_millis(90_250));
+    assert_eq!(
+        app.held_thought_age(),
+        Some(Duration::from_millis(250)),
+        "counted from the hold, not from the loop's start"
+    );
+    app.drop_held_thought();
+    assert_eq!(app.held_thought_age(), None);
+}
+
+#[test]
 fn nothing_is_held_across_a_new_turn_or_a_clear() {
     let held = |app: &mut App| {
         app.begin_stream();

@@ -78,7 +78,11 @@ pub fn preview_rows(app: &App, width: u16) -> u16 {
     // cell takes them — main session and agent session view alike
     // (docs/thought-handoff.md).
     if let Some(thought) = held_thought_on_screen(app) {
-        let rows = super::reasoning::held_thought_lines(thought, width).len();
+        let rows = if held_block_on_screen(app).is_some() {
+            super::reasoning::live_reasoning_lines(&thought.text, app.pulse(), width).len()
+        } else {
+            super::reasoning::held_thought_lines(thought, width).len()
+        };
         return u16::try_from(rows).unwrap_or(u16::MAX);
     }
     // An agent session view previews the *viewed agent's* stream — its live
@@ -285,6 +289,19 @@ pub(super) fn held_thought_on_screen(app: &App) -> Option<&crate::app::Reasoning
     } else {
         None
     }
+}
+
+/// The held thought while its **moment** lasts ([`REASONING_HOLD`] on the
+/// frame clock from the hold): the strip keeps its live `● Thinking…` block
+/// up as it was, so a quick call's cell lands on those rows with nothing on
+/// screen moving. Past the moment it is `None`, and the strip shows the
+/// settled line alone over the status line, the block's other rows waiting
+/// under it (`docs/thought-handoff.md`).
+pub(super) fn held_block_on_screen(app: &App) -> Option<&crate::app::Reasoning> {
+    held_thought_on_screen(app).filter(|_| {
+        app.held_thought_age()
+            .is_some_and(|age| age < REASONING_HOLD)
+    })
 }
 
 /// The cap the boundary passes to [`StreamRender::preview`]: how many strip

@@ -201,13 +201,14 @@ pub(super) fn live_reasoning_lines(text: &str, pulse: Duration, width: u16) -> V
 }
 
 /// A **settled** thought held in the strip until the next cell takes its rows
-/// (`docs/thought-handoff.md`): the live block with its header settled in
-/// place — the very `Thought for …` line [`reasoning_lines`] commits — over
-/// one **empty** row for each row of its tail, so the thought's text goes
-/// with its phase while the slot keeps exactly the rows the block did and the
-/// box does not move. The strip draws those rows under the status line, not
-/// over it, so one newline separates the two (`strip_lines`). When the next
-/// cell lands, the line commits with its spacer and the cell takes the rows.
+/// (`docs/thought-handoff.md`), once the moment its live block stays up for
+/// has passed: the block with its header settled in place — the very
+/// `Thought for …` line [`reasoning_lines`] commits — over one **empty** row
+/// for each row of its tail, so the thought's text is gone while the slot
+/// keeps exactly the rows the block did and the box does not move. The strip
+/// draws those rows under the status line, not over it, so one newline
+/// separates the two (`strip_lines`). When the next cell lands, the line
+/// commits with its spacer and the cell takes the rows.
 pub(super) fn held_thought_lines(reasoning: &Reasoning, width: u16) -> Vec<Line<'static>> {
     let mut lines = reasoning_lines(reasoning, width);
     let tail = thought_tail(&reasoning.text, width).len();
@@ -217,7 +218,8 @@ pub(super) fn held_thought_lines(reasoning: &Reasoning, width: u16) -> Vec<Line<
 
 /// The last [`REASONING_PEEK_LINES`] wrapped rows of `text` in the `⎿`
 /// gutter, blank source lines skipped — the body under the live block's
-/// header, which a held thought's settled line keeps as many empty rows of.
+/// header, which a held thought's settled line keeps as many empty rows of
+/// once its moment has passed.
 fn thought_tail(text: &str, width: u16) -> Vec<Line<'static>> {
     let inner = body_width(width);
     let mut window: VecDeque<String> = VecDeque::new();

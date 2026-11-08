@@ -1034,16 +1034,23 @@ first tool-call piece while the call gets a cell only at its batch, so
 collapsing the `● Thinking…` block at once sat the box up to three rows high
 for as long as the call took to generate and dropped it back when the cell
 landed (the flicker reported between a thought and a `skill` call; present in
-v0.18.0 too). The block now **settles in place** — `App::hold_thought` keeps
-the settled `Reasoning`, `ui::reasoning::held_thought_lines` draws its
-`Thought for …` line over the block's rows **emptied**, so the thought's text
-leaves with its phase (holding the text read as a flash of stale thought; a
-`● Bash` / `⎿ Waiting…` stand-in for the call was tried and dropped, since
-`Waiting…` read as a stuck tool), and `ui::live::strip_lines` draws those
-empty rows **under the status line**, the settled line one newline over it
-(held over it, they read as newlines reserved for the next cell), while a
-held thought never flows (`strip_content_preview_rows` builds it at the rows
-the region gives it, its spare rows going first) — while
+v0.18.0 too). The block now **stays up as it was for a moment** —
+`App::hold_thought` keeps the settled `Reasoning` with the frame clock's
+reading, and for `REASONING_HOLD` (300 ms, `App::held_thought_age`,
+`ui::layout::held_block_on_screen`) the strip draws the live block unchanged
+with its `Thinking for Ns` clause frozen on the status line, so a quick
+call's cell (ClinePass's hand-offs measured 8–100 ms but for a long command)
+lands on its rows with nothing moving, the status line included — and past
+the moment **settles in
+place**: `ui::reasoning::held_thought_lines` draws its `Thought for …` line
+over the block's rows **emptied**, so the thought's text is gone (holding the
+text under the settled line read as a flash of stale thought; a `● Bash` /
+`⎿ Waiting…` stand-in for the call was tried and dropped, since `Waiting…`
+read as a stuck tool), and `ui::live::strip_lines` draws those empty rows
+**under the status line**, the settled line one newline over it (held over
+it, they read as newlines reserved for the next cell), while a held thought
+never flows (`strip_content_preview_rows` builds it at the rows the region
+gives it, its spare rows going first) — while
 the boundary holds that line back from scrollback (`InlineViewport::hold`;
 any later `insert_before` releases it first, so scrollback order matches
 history by construction); `ui::holds_thought` says when something else has
@@ -1061,7 +1068,9 @@ rows was tried first and replaced: between rounds it held three empty lines
 over the status line for as long as the next request took; `smoke.sh` Phase
 153 pins no hop, the thought's text never beside its settled line, *and*
 exactly one blank row above the status line mid-turn, through
-the dummy and through the real backend against a paced stub; the **clickable OSC 8 links** (every URL an assistant
+the dummy and through the real backend against a paced stub, and a call
+landing 120 ms after its thought moving nothing at all (the moment is
+fix/settled-thought-line-alone's); the **clickable OSC 8 links** (every URL an assistant
 reply shows — a bare URL in prose/lists/table cells, inline/fenced/indented
 code, a heading, or a `[text](url)` target — is painted inside an OSC 8
 hyperlink carrying the whole URL, so a wrapped URL's every fragment opens the

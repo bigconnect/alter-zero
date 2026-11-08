@@ -42,6 +42,16 @@ pub struct Reasoning {
     pub timestamp: String,
 }
 
+/// A settled thought held on screen for the next cell
+/// ([`App::hold_thought`]), and when it was held — the frame clock's
+/// reading ([`App::pulse`]), which decides how long its live block stays up
+/// (`docs/thought-handoff.md`).
+#[derive(Debug, Clone)]
+pub(super) struct HeldThought {
+    thought: Reasoning,
+    since: Duration,
+}
+
 /// Split `total` over `weights` proportionally, the last part taking the
 /// remainder so the parts sum to exactly `total`.
 ///
@@ -130,11 +140,14 @@ impl App {
     }
 
     /// Hold a just-settled thought **on screen** until the next cell takes
-    /// its rows (`docs/thought-handoff.md`): the strip draws its settled
-    /// `Thought for …` line, one newline, the status line, then the rows the
-    /// live block stood on, empty — its text gone with the phase — while the
-    /// boundary holds that line back from scrollback. The thought is recorded
-    /// already ([`finish_reasoning`]); this is display only.
+    /// its rows (`docs/thought-handoff.md`): for a moment the strip keeps the
+    /// live block up as it was, so a quick call's cell lands on its rows with
+    /// nothing moving; past it, the strip draws the settled `Thought for …`
+    /// line, one newline, the status line, then the rows the block stood on,
+    /// empty. Meanwhile the boundary holds that line back from scrollback.
+    /// The thought is recorded already ([`finish_reasoning`]); this is
+    /// display only, and the moment runs on the frame clock from here
+    /// ([`held_thought_age`](App::held_thought_age)).
     ///
     /// The backend settles a phase at the round's first tool-call piece, but
     /// the call has a cell only once its batch is announced: collapsing the
@@ -144,14 +157,30 @@ impl App {
     ///
     /// [`finish_reasoning`]: App::finish_reasoning
     pub fn hold_thought(&mut self, thought: Reasoning) {
-        self.held_thought = Some(thought);
+        self.held_thought = Some(HeldThought {
+            thought,
+            since: self.pulse,
+        });
     }
 
     /// The thought held on screen ([`hold_thought`](App::hold_thought)), if
     /// any — what the strip draws while nothing else has taken its rows.
     #[must_use]
-    pub const fn held_thought(&self) -> Option<&Reasoning> {
-        self.held_thought.as_ref()
+    pub fn held_thought(&self) -> Option<&Reasoning> {
+        self.held_thought.as_ref().map(|held| &held.thought)
+    }
+
+    /// How long the held thought has stood in the strip, on the frame clock
+    /// ([`set_pulse`](App::set_pulse)) from its
+    /// [`hold_thought`](App::hold_thought), read off the clock as the last
+    /// frame left it (the spinner picker's `opened_at` rule) — what decides
+    /// whether its live block is still up (`docs/thought-handoff.md`).
+    /// `None` while nothing is held.
+    #[must_use]
+    pub fn held_thought_age(&self) -> Option<Duration> {
+        self.held_thought
+            .as_ref()
+            .map(|held| self.pulse.saturating_sub(held.since))
     }
 
     /// Let the held thought go — its line has committed, or the screen was

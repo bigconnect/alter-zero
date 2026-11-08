@@ -1,4 +1,4 @@
-# The thought hand-off — a settled thought holds its rows until the next cell lands
+# The thought hand-off — a settled thought keeps its rows until the next cell lands
 
 ## The report
 
@@ -120,28 +120,82 @@ rows. The status line steps up when the thought settles and back down under
 the call's cell when it lands; the composer and the footer never move, and the
 status line has the one blank row above it that it has everywhere else.
 
+## Why the block stays up for a moment
+
+The box held still, but the status line still moved: up to meet the settled
+line the moment the thought settled, back down under the call's cell when it
+landed. On a provider that sends a call quickly that is most hand-offs —
+ClinePass's measured 8 to 100 ms, all but one into a long command (0.4 s) —
+so the status line jumped three rows and back within a few frames: a smaller
+flicker, one band higher, at exactly the hand-off this design is for.
+
+`fix/settled-thought-line-alone` answered the quick case another way, and
+this design takes its answer: for a moment after the phase ends
+(`REASONING_HOLD`, 300 ms) the live block stays up **exactly as it was** —
+the `● Thinking…` header, the last rows of thought, the status line's
+`Thinking for Ns` clause frozen at the phase's length — and a call whose cell
+lands inside the moment takes the block's rows with nothing on screen moving
+at all, the status line included. Past the moment that branch collapsed the
+block into the line alone and let the box rise by the block's rows until the
+cell landed: the hop this design began with, for every call slower than the
+moment.
+
+The two compose. The moment comes first; past it, the layout above — the
+settled line alone, one newline, the status line, the spare rows under it. A
+quick call (nearly every one measured on ClinePass) moves nothing; a slow one
+— that long command — keeps the box still while the status line steps up
+once to meet the line and back down under the cell.
+
+The moment is not the lingering text of before. What read as a flash of stale
+thought was the screen *changing* — the block settling into its line with the
+thought still under it, then the thought going. Inside the moment nothing
+changes at all, which reads as the phase running a fraction of a second
+longer; nobody can tell when a phase ended to within a few hundred
+milliseconds. And 300 ms is short enough that a call still not announced past
+it is being written token by token — exactly when the line alone, with the
+status line still working under it, is the honest picture.
+
 ## The design
 
 **The thought settles in place.** At `ThinkingEnd` the phase is recorded as
 before (`App::finish_reasoning` — history order and the usage snap are
 unchanged), but its line is not written to scrollback yet:
 
-- `App::hold_thought` keeps the settled `Reasoning` for the strip, and
-  `ui::reasoning::held_thought_lines` builds it as the block it settled from
-  with its header settled in place — the very `Thought for …` line
-  `reasoning_lines` commits — over one empty row for each row of thought the
-  block showed. Same rows, so the box does not move when the phase ends, and
-  the thought's text is gone with it (Ctrl+O still expands it).
+- `App::hold_thought` keeps the settled `Reasoning` for the strip together
+  with the frame clock's reading at the hold (`HeldThought`'s `since`, from
+  `App::pulse`), and `App::held_thought_age` says how long it has stood — read
+  off the clock as the last frame left it, the spinner picker's `opened_at`
+  rule, so the moment runs up to one frame short of `REASONING_HOLD`. The
+  draw tick injects the clock before it draws, and a turn re-arms a frame
+  every 32 ms, so the moment ends on time with no timer of its own.
+- **For the moment** — `ui::layout::held_block_on_screen`: held, on screen,
+  and younger than `REASONING_HOLD` — `preview_rows`/`preview_lines` draw the
+  live block exactly as `live_reasoning_lines` drew it (the bullet's blink
+  and the label's shimmer included), and `strip_lines` puts the phase's
+  `Thinking for Ns` clause back on the status line, frozen at its length
+  (`Reasoning::secs`), since the status dropped it at `ThinkingEnd`. Nothing
+  on screen changes when the phase ends — on any terminal tall enough for
+  the block, that is: one too short for it flows the live block's head into
+  scrollback while it streams (`docs/strip-flow.md`), the held block never
+  flows (below), so there the phase's end re-signs the flow and the screen is
+  rebuilt from history, as it was before the moment.
+- **Past it**, `ui::reasoning::held_thought_lines` builds the thought as the
+  block it settled from with its header settled in place — the very
+  `Thought for …` line `reasoning_lines` commits — over one empty row for
+  each row of thought the block showed. Same rows, so the box does not move
+  when the moment ends, and the thought's text is gone (Ctrl+O still expands
+  it).
 - `ui::live::strip_lines` draws those empty rows **under the status line**
   (after whatever hangs off it — the checklist, the tip — and before its
   trailing gap), leaving the settled line alone in the preview slot, one
   newline over the status line. The count is unchanged, so every geometry
   that sized the slot agrees by construction.
 - A held thought is built at the rows the region gives it, never at its full
-  ask: `strip_content_preview_rows` no longer counts it as live cells, so it
-  never flows into scrollback (where its line would be written twice — once
-  flowed, once released), and on a short terminal the spare rows go first, the
-  settled line last.
+  ask, in either phase: `strip_content_preview_rows` does not count it as
+  live cells, so it never flows into scrollback (where its line would be
+  written twice — once flowed, once released), and on a short terminal the
+  block keeps its head, the settled line its line, the spare rows going
+  first.
 - The boundary queues the line and its spacer on `InlineViewport::hold`
   instead of `insert_before`: committed, but held back from the next flush.
 
@@ -160,10 +214,26 @@ line commits at once rather than staying held through the next request.
 The first frame it stops holding, `Session::sync_held_thought` (run at the top
 of the draw tick and of `draw_conversation`) releases the held line into the
 queue and drops the thought, so that frame writes the line and its spacer
-above and draws the new content under them, the status line back below it:
+above and draws the new content under them on the rows the block stood on,
+the status line below it. The phase ends, and for the moment nothing changes:
 
 ```
-Thought for 0s · 50 tokens (ctrl+o to expand)     ← the settle: same row as the header
+● Thinking…                                        ← the block, as it was
+  ⎿  The user wants the current champion.
+     Load the web-search skill first.
+     No intermediate response.
+
+⣀⣀⣀⣀⣀⣛⣀⣀ Working… (0s · ↓ 77 tokens · Thinking for 0s · esc to interrupt)
+
+──────────────────────────────────────────────────
+❯
+```
+
+A slow call finds the moment over, and the thought settled into its line —
+on the header's row — alone:
+
+```
+Thought for 0s · 50 tokens (ctrl+o to expand)     ← same row as the header
 
 ⣀⣀⣀⣀⣀⣛⣀⣀ Working… (0s · ↓ 77 tokens · esc to interrupt)
                                                    ← the thought's three rows, empty,
@@ -173,6 +243,10 @@ Thought for 0s · 50 tokens (ctrl+o to expand)     ← the settle: same row as t
 ──────────────────────────────────────────────────
 ❯
 ```
+
+Either way the cell lands the same, the line committed above it — from the
+first picture with nothing else moving, from the second with the status line
+stepping back down:
 
 ```
 Thought for 0s · 50 tokens (ctrl+o to expand)     ← now in scrollback, same row
@@ -211,7 +285,8 @@ when the main conversation's request was retried.
 **Where it holds.** Only at the phase's own end: an Esc or a backend error
 settles at once, since the turn is ending and its own commits follow. The
 agent session view holds the viewed agent's thought the same way
-(`settle_agent_reasoning`'s `hold`), its slot read off the viewed run.
+(`settle_agent_reasoning`'s `hold`), its slot read off the viewed run and its
+moment off the same frame clock, which runs while any agent does.
 
 ## What it does not change
 
@@ -229,37 +304,49 @@ agent session view holds the viewed agent's thought the same way
 
 ## Testing
 
-- `ui::tests::held_thought`: the held view stands on the block's rows with its
-  header settled into the committed line over empty rows, the thought's text
-  gone — in a subagent's strip too; the whole strip draws the settled line,
-  one newline, the status line, then the spare rows; a held thought never
-  flows and gives up its spare rows first on a short terminal; the box does
-  not move from the thought to the call (and while the call is still
-  generating); the hold gives way to a streaming `write`, the reply's first
-  words (not whitespace), a new phase, a modal and the turn's end; a record
-  after the thought (a task call, an agent's hook note) ends the hold; nothing
-  holds a row between rounds; a subagent's thought is held in its own strip.
-  `app::tests::reasoning`: the hold's lifecycle, dropped by a new turn and by
-  `/clear`. Every guard in `holds_thought` and the phase reset is
-  mutation-checked — each fails its test when removed.
-- `scripts/smoke.sh` **Phase 153** samples four turns ~20 times a second with
+- `ui::tests::held_thought`: for the moment the held thought is the block it
+  settled from, its `Thinking for Ns` clause still on the status line, and a
+  call landing inside it moves neither the box nor the status line; the
+  moment counts from the hold, not from the phase's start; past it the held
+  view stands on the block's rows with its header settled into the committed
+  line over empty rows, the thought's text gone — in a subagent's strip too;
+  the whole strip then draws the settled line, one newline, the status line,
+  the spare rows; a held thought never flows and gives up its spare rows
+  first on a short terminal, in either phase; the box does not move from the
+  thought to the call, with the moment lapsing on the way (and while the call
+  is still generating); the hold gives way to a streaming `write`, the
+  reply's first words (not whitespace), a new phase, a modal and the turn's
+  end; a record after the thought (a task call, an agent's hook note) ends
+  the hold; nothing holds a row between rounds; a subagent's thought is held
+  in its own strip. `app::tests::reasoning`: the hold's lifecycle, dropped by
+  a new turn and by `/clear`, and its age on the frame clock. Every guard in
+  `holds_thought` and the phase reset is mutation-checked — each fails its
+  test when removed.
+- `scripts/smoke.sh` **Phase 153** samples five turns ~20 times a second with
   Phase 121's double-capture rule: no hop while the hand-off is under way, the
-  settled line seen one newline over the status line, the thought's text never
-  on screen beside it (a sighting confirmed 150 ms later), and never more than
-  one blank row above the status line. The default offline turn runs on a
-  terminal with room below the box (no purge rebuild; the thought's line and
-  each cell exactly once, the thought's own text never in scrollback) and on
-  an 80×16 one, where the box sits on the bottom row. Two more go through the
-  real backend against a paced stub provider (ported from
-  fix/box-flicker-after-thinking): a `bash` call written over about a second,
-  then a three-second round boundary; and a thought followed only by a
-  `taskcreate`, then a request that fails with a 500 once, after which the
-  thought's line must be in scrollback exactly once. The pre-fix binary fails
+  thought's text never on screen beside its settled line (a sighting
+  confirmed 150 ms later), never more than one blank row above the status
+  line, and every rise of the status line with the box still counted. The
+  default offline turn runs on a terminal with room below the box (no purge
+  rebuild; the thought's line and each cell exactly once, the thought's own
+  text never in scrollback) and on an 80×16 one, where the box sits on the
+  bottom row. Three more go through the real backend against a paced stub
+  provider (ported from fix/box-flicker-after-thinking): a `bash` call
+  written over about a second, then a three-second round boundary; a
+  thought followed only by a `taskcreate`, then a request that fails with a
+  500 once, after which the thought's line must be in scrollback exactly
+  once; and, from fix/settled-thought-line-alone's Phase 153, the reported
+  shape — a call whose cell lands 120 ms after the thought. The three slow
+  turns must show the settled line one newline over the status line, the
+  status line stepping up at most once; the quick one must move nothing —
+  no status-line rise, and the line never alone. The pre-fix binary fails
   the first three turns (the hop, no held view), the floor's binary the blank
   rows, and e97ef69's — the rows held with the thought's text in them, before
-  the newest-record rule and the retry fix — all four: the lingering text in
-  the first three, the lost line in the fourth. 5b96b4a's, whose empty rows
-  stood over the status line, fails the one-newline checks in the first three.
+  the newest-record rule and the retry fix — the lingering text in the first
+  three and the lost line in the fourth. 5b96b4a's, whose empty rows stood
+  over the status line, fails the one-newline checks in the first three, and
+  3020d57's, which settled the line at once, the fifth: the status line
+  rising, the line alone.
 - Real provider, ClinePass's `deepseek-v4.1-flash-1017`: with the thought's
   text kept in the held rows, the reported prompt at 100×30, 80×24 and 80×14
   — no hop at the thought → `skill` hand-off. With the rows emptied over the
@@ -269,4 +356,12 @@ agent session view holds the viewed agent's thought the same way
   a `bash` call at 80×24): exactly one blank row above the status line in
   every mid-turn frame, holds of 8 to 43 ms, the thought's text never under
   its settled line, and no hop at any thought → call hand-off — the one hop
-  left was a thought giving way to the reply (above).
+  left was a thought giving way to the reply (above). With the moment, six
+  more (the reported prompt three times, a thought then reads, a thought
+  before a heredoc `bash` call, and one at 80×24): six thought → call
+  hand-offs — `skill`, a read group and four `bash` calls — every one landing
+  inside the moment, with no hop, no rise of the status line, no frame
+  showing the line alone and the thought's text never under its line; one
+  blank row above the status line in every mid-turn frame but a single frame
+  of a reply's own frontier; and again the only hops were a thought giving
+  way to the reply.

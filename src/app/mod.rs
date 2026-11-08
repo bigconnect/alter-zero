@@ -245,14 +245,13 @@ pub struct App {
     /// boundary then never opens one. See `docs/thinking-stream.md`.
     reasoning: Option<String>,
     /// The thought that just settled, **held on screen** until the next cell
-    /// takes its rows: the strip draws its settled `Thought for …` line,
-    /// one newline, the status line, then the rows its thought stood on,
-    /// empty — the text goes with its phase — so the box stays where the
-    /// live block had it, while the boundary holds that line back from
-    /// scrollback. Set and
-    /// dropped by the boundary ([`hold_thought`](App::hold_thought)); see
-    /// `docs/thought-handoff.md`.
-    held_thought: Option<Reasoning>,
+    /// takes its rows, and when it was held: for a moment the strip keeps its
+    /// live block up as it was, then draws its settled `Thought for …` line,
+    /// one newline, the status line, and the rows the block stood on, empty —
+    /// so the box stays where the live block had it — while the boundary
+    /// holds that line back from scrollback. Set and dropped by the boundary
+    /// ([`hold_thought`](App::hold_thought)); see `docs/thought-handoff.md`.
+    held_thought: Option<reasoning::HeldThought>,
     /// Where this round's settled [`HistoryItem::Reasoning`] items landed in
     /// [`history`](Self::history) — the snap targets for the round's usage
     /// frame, which reports the *real* `reasoning_tokens` the cells were built

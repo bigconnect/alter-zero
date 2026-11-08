@@ -5,23 +5,27 @@
 //! but the call has a cell only once its batch is announced. The `● Thinking…`
 //! block used to collapse at once — its rows gone, the box rising, then
 //! dropping back when the call's cell landed: the flicker reported between a
-//! quick think and a `skill` call. The block now settles **in place** — its
-//! header becomes the `Thought for …` line, one newline over the status
-//! line, and the rows its thought stood on stay, empty, under the status
-//! line — and gives those rows to whatever takes the slot next. Nothing else
-//! ever holds rows: between rounds the strip is the status line under one
-//! spacer.
+//! quick think and a `skill` call. So the block stays up **as it was** for
+//! [`REASONING_HOLD`], a quick call's cell landing on its rows with nothing
+//! on screen moving; past that its `Thought for …` line stands alone, one
+//! newline over the status line, and the rows the block stood on wait,
+//! empty, under the status line — the box never moves. Nothing else ever
+//! holds rows: between rounds the strip is the status line under one spacer.
 
 use super::*;
 use crate::app::Reasoning;
 use crate::stream::{StreamEvent, ToolCallFragment, ToolCallSummary};
 use crate::ui::layout::{live_height_for, live_rows};
 use crate::ui::live::preview_lines;
+use crate::ui::theme::REASONING_HOLD;
 
 const W: u16 = 80;
 const H: u16 = 30;
 
 const THOUGHT: &str = "The user wants the champion.\nUse the skill first.\nThen search.";
+
+/// A beat inside the hold — how long a quick call takes to generate.
+const QUICK: Duration = Duration::from_millis(80);
 
 /// The composer path's region height for `app` — the boundary's
 /// `live_region_height` with no composer-replacing view open.
@@ -68,6 +72,40 @@ fn whole_strip(app: &App, height: u16) -> Vec<String> {
     ))
 }
 
+/// Where the status line sits in the whole strip — what the eye follows
+/// while the box holds still.
+fn status_index(app: &App) -> usize {
+    whole_strip(app, H)
+        .iter()
+        .position(|row| row.contains("esc to interrupt"))
+        .expect("a status line mid-turn")
+}
+
+/// The status line's own text.
+fn status_row(app: &App) -> String {
+    whole_strip(app, H)
+        .into_iter()
+        .find(|row| row.contains("esc to interrupt"))
+        .expect("a status line mid-turn")
+}
+
+/// The first piece of a `skill` call — what settles the thought, and what a
+/// skill call previews nothing for while it streams.
+fn skill_piece() -> ToolCallFragment {
+    ToolCallFragment {
+        index: 0,
+        name: "skill".into(),
+        arguments: String::new(),
+    }
+}
+
+/// Whether any row of `lines` is a settled `Thought for …` line.
+fn shows_a_settled_line(lines: &[Line]) -> bool {
+    lines
+        .iter()
+        .any(|line| plain(line).starts_with("Thought for"))
+}
+
 fn call(name: &str, args: &str) -> ToolCallSummary {
     ToolCallSummary {
         name: name.to_string(),
@@ -76,9 +114,26 @@ fn call(name: &str, args: &str) -> ToolCallSummary {
 }
 
 #[test]
-fn a_held_thought_stands_on_the_rows_its_block_did() {
+fn a_held_thought_keeps_the_block_it_settled_from() {
+    // For a moment the block stays up as it was, header and thought, so a
+    // quick call's cell takes its rows with nothing on screen changing first.
     let block = strip(&thinking(THOUGHT));
-    let (app, thought) = settled(THOUGHT);
+    let (app, _) = settled(THOUGHT);
+    let held = strip(&app);
+    assert_eq!(texts(&held), texts(&block), "the block stays up as it was");
+    assert!(
+        !shows_a_settled_line(&held),
+        "the settled line never stands over its own thought: {:?}",
+        texts(&held)
+    );
+    assert!(holds_thought(&app), "nothing has taken the slot yet");
+}
+
+#[test]
+fn once_its_moment_passes_the_line_stands_on_the_blocks_rows() {
+    let block = strip(&thinking(THOUGHT));
+    let (mut app, thought) = settled(THOUGHT);
+    app.set_pulse(REASONING_HOLD);
     let held = strip(&app);
     assert_eq!(held.len(), block.len(), "the slot keeps the block's rows");
     assert_eq!(
@@ -96,13 +151,14 @@ fn a_held_thought_stands_on_the_rows_its_block_did() {
 }
 
 #[test]
-fn the_status_line_sits_one_newline_under_a_settled_thought() {
+fn once_its_moment_passes_the_status_line_sits_one_newline_under_the_line() {
     // The reported "it should only have 1 newline": the rows the thought
     // stood on stay, or the box would rise and drop back, but they stand
     // under the status line, between it and the composer, rather than over
     // it as though something were about to land there.
     let block = whole_strip(&thinking(THOUGHT), H);
-    let (app, thought) = settled(THOUGHT);
+    let (mut app, thought) = settled(THOUGHT);
+    app.set_pulse(REASONING_HOLD);
     let rows = whole_strip(&app, H);
     assert_eq!(
         rows.len(),
@@ -127,23 +183,125 @@ fn a_settled_thought_never_flows_and_gives_up_its_spare_rows_first() {
     // second time when the hold lets it go, so the held rows are built at
     // what the region gives them; on a short terminal the spare rows are
     // what goes, the settled line last.
-    let (app, thought) = settled(THOUGHT);
+    let (mut app, thought) = settled(THOUGHT);
     let line = plain(&reasoning_lines(&thought, W)[0]);
-    for height in 6..H {
-        let fitted = crate::ui::fitted_preview_rows(&app, W, height);
-        assert_eq!(
-            crate::ui::live::strip_content_preview_rows(&app, W, height),
-            fitted,
-            "the held rows are built at what the region gives them (height {height})"
-        );
-        let rows = whole_strip(&app, height);
-        if fitted > 0 {
+    for lapsed in [false, true] {
+        app.set_pulse(if lapsed { REASONING_HOLD } else { QUICK });
+        for height in 6..H {
+            let fitted = crate::ui::fitted_preview_rows(&app, W, height);
             assert_eq!(
-                rows[0], line,
-                "the settled line goes last (height {height})"
+                crate::ui::live::strip_content_preview_rows(&app, W, height),
+                fitted,
+                "the held rows are built at what the region gives them \
+                 (height {height}, lapsed {lapsed})"
             );
+            let rows = whole_strip(&app, height);
+            if fitted > 0 && lapsed {
+                assert_eq!(
+                    rows[0], line,
+                    "the settled line goes last (height {height})"
+                );
+            } else if fitted > 0 {
+                assert!(
+                    rows[0].contains("Thinking"),
+                    "the block's header goes last (height {height}): {rows:?}"
+                );
+            }
         }
     }
+}
+
+#[test]
+fn a_quick_call_moves_neither_the_box_nor_the_status_line() {
+    // The reported flicker's shape: think → a call whose cell lands a beat
+    // after the thought settles. Inside the moment nothing on screen moves —
+    // not the box, and not the status line over it.
+    let thinking_app = thinking(THOUGHT);
+    let block = region(&thinking_app);
+    let status = status_index(&thinking_app);
+    let (mut app, thought) = settled(THOUGHT);
+    app.push_tool_call_fragment(&skill_piece());
+    app.set_pulse(QUICK);
+    assert!(
+        holds_thought(&app),
+        "a call still being written has no cell yet"
+    );
+    assert_eq!(
+        region(&app),
+        block,
+        "the box holds still while it is written"
+    );
+    assert_eq!(status_index(&app), status, "…and so does the status line");
+    app.start_tool_batch(&[call("Skill", "web-search")]);
+    assert!(!holds_thought(&app), "the call's cell takes the slot");
+    app.drop_held_thought();
+    let committed = reasoning_lines(&thought, W).len() + 1;
+    assert_eq!(
+        usize::from(region(&app)) + committed,
+        usize::from(block),
+        "the box ends where it started"
+    );
+    assert_eq!(
+        status_index(&app) + committed,
+        status,
+        "the status line ends where it was, under the call's cell"
+    );
+}
+
+#[test]
+fn the_block_keeps_its_thinking_clause_while_it_holds() {
+    // The block stays up as it was, its timer with it: the status line's
+    // `Thinking for Ns` clause goes in the frame the block does, not a beat
+    // before it — at the settle the boundary's thinking clock stops, so the
+    // clause stands frozen at the phase's length.
+    let mut app = thinking(THOUGHT);
+    app.set_status_times(Duration::from_secs(4), Some(Duration::from_secs(2)));
+    assert!(
+        status_row(&app).contains("Thinking for 2s"),
+        "{}",
+        status_row(&app)
+    );
+    let thought = app.finish_reasoning(2).expect("a thought");
+    app.hold_thought(thought);
+    app.set_status_times(Duration::from_secs(4), None);
+    assert!(
+        status_row(&app).contains("Thinking for 2s"),
+        "the clause holds with the block: {}",
+        status_row(&app)
+    );
+    app.set_pulse(REASONING_HOLD);
+    assert!(
+        !status_row(&app).contains("Thinking for"),
+        "…and goes with it: {}",
+        status_row(&app)
+    );
+}
+
+#[test]
+fn the_moment_counts_from_the_hold_not_from_the_start() {
+    // The frame clock has run since the loop started; a thought settled a
+    // minute and a half in keeps its block up for the same moment as one
+    // settled at once.
+    let mut app = thinking(THOUGHT);
+    let start = Duration::from_secs(90);
+    app.set_pulse(start);
+    let thought = app.finish_reasoning(0).expect("a thought");
+    app.hold_thought(thought);
+    assert!(
+        !shows_a_settled_line(&strip(&app)),
+        "a thought held now keeps its block"
+    );
+    app.set_pulse(start + QUICK);
+    assert!(
+        !shows_a_settled_line(&strip(&app)),
+        "…through a quick call's generation"
+    );
+    app.set_pulse(start + REASONING_HOLD);
+    assert!(
+        shows_a_settled_line(&strip(&app)),
+        "…and then its line stands alone"
+    );
+    assert!(holds_thought(&app), "still holding the rows for the call");
 }
 
 #[test]
@@ -154,16 +312,17 @@ fn the_box_does_not_move_from_the_thought_to_the_call() {
     assert_eq!(region(&app), block, "settling moves nothing");
     // The call is still being generated — the backend settled the thought at
     // its first piece — and a skill call previews nothing while it streams.
-    app.push_tool_call_fragment(&ToolCallFragment {
-        index: 0,
-        name: "skill".into(),
-        arguments: String::new(),
-    });
+    app.push_tool_call_fragment(&skill_piece());
     assert!(
         holds_thought(&app),
         "a call still being generated has no cell yet"
     );
     assert_eq!(region(&app), block, "…so the thought keeps its rows");
+    // A call slower than the moment: the line stands alone, and the rows the
+    // block stood on wait under the status line — the box still holds.
+    app.set_pulse(REASONING_HOLD);
+    assert!(holds_thought(&app), "still no cell");
+    assert_eq!(region(&app), block, "the lapse moves the box nowhere");
     // The batch is announced: the call's cell takes the slot, and the held
     // line commits with it — the line and its spacer above, the cell where
     // the thought was.
@@ -305,6 +464,17 @@ fn a_viewed_agents_thought_is_held_in_its_own_strip() {
     let block = strip(&app);
     let thought = app.finish_agent_reasoning("a1", 0).expect("a thought");
     app.hold_thought(thought.clone());
+    assert_eq!(
+        texts(&strip(&app)),
+        texts(&block),
+        "the agent's block stays up as it was"
+    );
+    assert!(
+        status_row(&app).contains("Thinking for 0s"),
+        "the agent's block keeps its clause too: {}",
+        status_row(&app)
+    );
+    app.set_pulse(REASONING_HOLD);
     let held = strip(&app);
     assert_eq!(
         held.len(),
