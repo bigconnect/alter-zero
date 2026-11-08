@@ -203,10 +203,11 @@ pub(super) fn live_reasoning_lines(text: &str, pulse: Duration, width: u16) -> V
 /// A **settled** thought held in the strip until the next cell takes its rows
 /// (`docs/thought-handoff.md`): the live block with its header settled in
 /// place — the very `Thought for …` line [`reasoning_lines`] commits — over
-/// **empty** rows where its tail stood, so the thought's text goes with its
-/// phase while the slot keeps exactly the rows the block did and the box does
-/// not move. When the next cell lands, the line commits with its spacer and
-/// the cell takes the empty rows.
+/// one **empty** row for each row of its tail, so the thought's text goes
+/// with its phase while the slot keeps exactly the rows the block did and the
+/// box does not move. The strip draws those rows under the status line, not
+/// over it, so one newline separates the two (`strip_lines`). When the next
+/// cell lands, the line commits with its spacer and the cell takes the rows.
 pub(super) fn held_thought_lines(reasoning: &Reasoning, width: u16) -> Vec<Line<'static>> {
     let mut lines = reasoning_lines(reasoning, width);
     let tail = thought_tail(&reasoning.text, width).len();

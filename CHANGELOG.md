@@ -169,9 +169,10 @@ release heading when a version is cut.
   generate the box and footer jumped up as much as three rows and then
   dropped back: a flicker that came and went with how fast the call
   arrived. The block now settles in place: its header becomes the
-  `Thought for …` line, the thought's text disappears at once, and the
-  call's cell lands on the rows it left, in the main conversation and in a
-  subagent's session view alike (`docs/thought-handoff.md`).
+  `Thought for …` line, the thought's text disappears at once, the status
+  line sits one newline under it, and the call's cell lands there while the
+  input box stays where it was, in the main conversation and in a subagent's
+  session view alike (`docs/thought-handoff.md`).
 
 - **A broken hook is named by the first line of its command.** When a hook
   written as a multi-line inline script failed, timed out or printed

@@ -372,8 +372,9 @@ impl Session<'_> {
     /// words, a new phase, a modal — the turn ended, or a commit already
     /// released the held line ahead of itself. Its line is queued now, so the
     /// frame that draws what replaced the thought writes the line with it:
-    /// the line and its spacer above, the new content on the empty rows the
-    /// thought stood on, and the box exactly where it was.
+    /// the line and its spacer above, the new content under them with the
+    /// status line back below it, over the rows the thought stood on, and
+    /// the box exactly where it was.
     pub(crate) fn sync_held_thought(&mut self) {
         let holding = self.term.has_held() && ui::holds_thought(&self.app);
         if !holding {

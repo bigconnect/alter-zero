@@ -111,8 +111,9 @@ pub(super) fn preview_lines(
     let rows = usize::from(rows);
     // A thought that just settled, held on its block's rows until the next
     // cell takes them — its settled line over the empty rows its thought
-    // stood on, the head kept on a squeezed slot (docs/thought-handoff.md).
-    // `preview_rows` sizes the same branch first.
+    // stood on, which `strip_lines` draws under the status line instead, the
+    // line kept on a squeezed slot (docs/thought-handoff.md). `preview_rows`
+    // sizes the same branch first.
     if let Some(thought) = super::layout::held_thought_on_screen(app) {
         return trim_preview(
             super::reasoning::held_thought_lines(thought, width),
@@ -437,6 +438,18 @@ pub(super) fn strip_lines(
     preview_n: u16,
 ) -> Vec<Line<'static>> {
     let mut lines = preview_lines(app, width, stream_preview, preview_n);
+    let has_status = strip_has_status(app);
+    // A settled thought keeps the rows its block stood on, or the box would
+    // rise and drop back when the call lands, but they stand under the
+    // status line rather than over it: the settled line, one newline, the
+    // status line, then the spare rows down to the composer
+    // (docs/thought-handoff.md). The count is unchanged, so every geometry
+    // that sized the slot still agrees.
+    let spare = if has_status && super::layout::held_thought_on_screen(app).is_some() {
+        lines.split_off(lines.len().min(1))
+    } else {
+        Vec::new()
+    };
     if !lines.is_empty() {
         // The blank gap under the preview, so the reply/cell never touches
         // the status line below it (GAP_ROWS).
@@ -447,7 +460,6 @@ pub(super) fn strip_lines(
     // (app, width) as `task_rows` — the checklist's half of `hang_rows` — so
     // the reserved rows and the painted ones agree by construction.
     let tasks = super::tasks::task_lines(app, width);
-    let has_status = strip_has_status(app);
     if has_status {
         // The live status line, just above the box while a turn is in flight
         // — suppressed for a `!` shell turn (has_status false), whose elapsed
@@ -480,6 +492,7 @@ pub(super) fn strip_lines(
         lines.extend(super::offline::status_offline_lines(app, width));
         lines.extend(tasks);
         lines.extend(super::tips::status_tip_lines(app, width));
+        lines.extend(spare);
         lines.push(Line::default()); // STATUS_GAP_ROWS
     } else if !tasks.is_empty() {
         // No status line to hang from (the turn is over, or a `!` shell run
@@ -550,10 +563,11 @@ pub(super) fn strip_content_preview_rows(app: &App, width: u16, term_height: u16
 /// streaming reply's frontier. What [`strip_content_preview_rows`] branches
 /// on; mirrors [`preview_rows`]' own branch order.
 fn strip_preview_is_live_cells(app: &App) -> bool {
-    // A held thought is the block it settled from, still on screen.
-    if super::layout::holds_thought(app) {
-        return true;
-    }
+    // A held thought is not one: its line is committed already, held back
+    // from the flush, and a head that flowed into scrollback would be written
+    // there a second time when the hold lets it go — so it is built at what
+    // the region gives it, its spare rows the first to go
+    // (docs/thought-handoff.md).
     if let Some(run) = app.viewed_agent() {
         return !run.tool_queue.is_empty()
             || run.drafts().previews().next().is_some()

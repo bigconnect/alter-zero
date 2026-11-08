@@ -76,9 +76,10 @@ which Ctrl+V reads the clipboard from.
   running backend tool previews its whole `header + ⎿ Running…` cell, so a long
   command isn't clipped, `docs/tools.md`), and the first chunk flips the arrow
   `↓`. A thought settles **in place**: its `● Thinking…` header becomes the
-  `Thought for` line over the block's rows, emptied — the thought's text goes
-  with its phase — until the round's call has a cell to take them, so the box
-  does not rise while the call is generated and drop back when it lands
+  `Thought for` line one newline over the status line, the thought's text
+  gone with its phase and the rows it stood on kept, empty, under the status
+  line until the round's call has a cell to take them, so the box does not
+  rise while the call is generated and drop back when it lands
   (`ui::holds_thought`, `docs/thought-handoff.md`). Nothing else holds rows:
   between rounds the status line sits one spacer under the last cell. While a
   turn is active the draw branch re-arms an animation frame every 32 ms (codex's

@@ -1039,7 +1039,11 @@ the settled `Reasoning`, `ui::reasoning::held_thought_lines` draws its
 `Thought for …` line over the block's rows **emptied**, so the thought's text
 leaves with its phase (holding the text read as a flash of stale thought; a
 `● Bash` / `⎿ Waiting…` stand-in for the call was tried and dropped, since
-`Waiting…` read as a stuck tool) — while
+`Waiting…` read as a stuck tool), and `ui::live::strip_lines` draws those
+empty rows **under the status line**, the settled line one newline over it
+(held over it, they read as newlines reserved for the next cell), while a
+held thought never flows (`strip_content_preview_rows` builds it at the rows
+the region gives it, its spare rows going first) — while
 the boundary holds that line back from scrollback (`InlineViewport::hold`;
 any later `insert_before` releases it first, so scrollback order matches
 history by construction); `ui::holds_thought` says when something else has
@@ -1047,15 +1051,16 @@ taken the slot — a call's cell, a streaming `write`, the reply's first words,
 a new phase, a modal, the turn's end, or any record after the thought (a
 task call has no cell, so its round leaves nothing to land on the rows) — and
 `Session::sync_held_thought` releases the line in that frame, the new content
-landing on the emptied rows, while only a purge rebuild drops it unwritten
+landing under it and the status line stepping back down over the emptied
+rows, while only a purge rebuild drops it unwritten
 (history carries it; a `Retrying` leaves it alone, since the withdrawal's own
 rebuild clears a thought the failed attempt produced and an earlier round's
 must still commit) and the agent session view holds its viewed agent's
 thought the same way. A preview **floor** padding every hand-off with blank
 rows was tried first and replaced: between rounds it held three empty lines
 over the status line for as long as the next request took; `smoke.sh` Phase
-153 pins no hop, the thought's text never beside its settled line, *and* one
-blank row above the status line mid-turn past those emptied rows, through
+153 pins no hop, the thought's text never beside its settled line, *and*
+exactly one blank row above the status line mid-turn, through
 the dummy and through the real backend against a paced stub; the **clickable OSC 8 links** (every URL an assistant
 reply shows — a bare URL in prose/lists/table cells, inline/fenced/indented
 code, a heading, or a `[text](url)` target — is painted inside an OSC 8

@@ -245,10 +245,11 @@ pub struct App {
     /// boundary then never opens one. See `docs/thinking-stream.md`.
     reasoning: Option<String>,
     /// The thought that just settled, **held on screen** until the next cell
-    /// takes its rows: the strip draws it as its settled `Thought for …`
-    /// line over empty rows where its thought stood — the text goes with
-    /// its phase — standing on the rows the live block did, while the
-    /// boundary holds that line back from scrollback. Set and
+    /// takes its rows: the strip draws its settled `Thought for …` line,
+    /// one newline, the status line, then the rows its thought stood on,
+    /// empty — the text goes with its phase — so the box stays where the
+    /// live block had it, while the boundary holds that line back from
+    /// scrollback. Set and
     /// dropped by the boundary ([`hold_thought`](App::hold_thought)); see
     /// `docs/thought-handoff.md`.
     held_thought: Option<Reasoning>,

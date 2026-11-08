@@ -6,10 +6,11 @@
 //! block used to collapse at once — its rows gone, the box rising, then
 //! dropping back when the call's cell landed: the flicker reported between a
 //! quick think and a `skill` call. The block now settles **in place** — its
-//! header becomes the `Thought for …` line, the rows its thought stood on
-//! stay, empty, since the text goes with its phase — and gives those rows to
-//! whatever takes the slot next. Nothing else ever holds rows: between rounds
-//! the strip is the status line under one spacer.
+//! header becomes the `Thought for …` line, one newline over the status
+//! line, and the rows its thought stood on stay, empty, under the status
+//! line — and gives those rows to whatever takes the slot next. Nothing else
+//! ever holds rows: between rounds the strip is the status line under one
+//! spacer.
 
 use super::*;
 use crate::app::Reasoning;
@@ -55,6 +56,18 @@ fn settled(text: &str) -> (App, Reasoning) {
     (app, thought)
 }
 
+/// The whole strip at a terminal `height` rows tall, as the paint builds
+/// it: the preview slot, the status line with what hangs off it, the queued
+/// messages and the toast.
+fn whole_strip(app: &App, height: u16) -> Vec<String> {
+    texts(&crate::ui::live::strip_lines(
+        app,
+        W,
+        None,
+        crate::ui::live::strip_content_preview_rows(app, W, height),
+    ))
+}
+
 fn call(name: &str, args: &str) -> ToolCallSummary {
     ToolCallSummary {
         name: name.to_string(),
@@ -80,6 +93,57 @@ fn a_held_thought_stands_on_the_rows_its_block_did() {
         texts(&held)
     );
     assert!(holds_thought(&app), "nothing has taken the slot yet");
+}
+
+#[test]
+fn the_status_line_sits_one_newline_under_a_settled_thought() {
+    // The reported "it should only have 1 newline": the rows the thought
+    // stood on stay, or the box would rise and drop back, but they stand
+    // under the status line, between it and the composer, rather than over
+    // it as though something were about to land there.
+    let block = whole_strip(&thinking(THOUGHT), H);
+    let (app, thought) = settled(THOUGHT);
+    let rows = whole_strip(&app, H);
+    assert_eq!(
+        rows.len(),
+        block.len(),
+        "the strip keeps the block's rows, so the box stays put"
+    );
+    assert_eq!(rows[0], plain(&reasoning_lines(&thought, W)[0]));
+    assert_eq!(rows[1], "", "one newline under the settled line");
+    assert!(
+        rows[2].contains("esc to interrupt"),
+        "then the status line: {rows:?}"
+    );
+    assert!(
+        rows[3..].iter().all(|row| row.trim().is_empty()),
+        "the spare rows sit under the status line: {rows:?}"
+    );
+}
+
+#[test]
+fn a_settled_thought_never_flows_and_gives_up_its_spare_rows_first() {
+    // A held line that flowed into scrollback would be written there a
+    // second time when the hold lets it go, so the held rows are built at
+    // what the region gives them; on a short terminal the spare rows are
+    // what goes, the settled line last.
+    let (app, thought) = settled(THOUGHT);
+    let line = plain(&reasoning_lines(&thought, W)[0]);
+    for height in 6..H {
+        let fitted = crate::ui::fitted_preview_rows(&app, W, height);
+        assert_eq!(
+            crate::ui::live::strip_content_preview_rows(&app, W, height),
+            fitted,
+            "the held rows are built at what the region gives them (height {height})"
+        );
+        let rows = whole_strip(&app, height);
+        if fitted > 0 {
+            assert_eq!(
+                rows[0], line,
+                "the settled line goes last (height {height})"
+            );
+        }
+    }
 }
 
 #[test]
@@ -252,6 +316,12 @@ fn a_viewed_agents_thought_is_held_in_its_own_strip() {
         held[1..].iter().all(|row| plain(row).trim().is_empty()),
         "the agent's thought goes with its phase too: {:?}",
         texts(&held)
+    );
+    let rows = whole_strip(&app, H);
+    assert_eq!(rows[1], "", "one newline under the agent's settled line");
+    assert!(
+        rows[2].contains("esc to interrupt"),
+        "then the agent's status line: {rows:?}"
     );
     assert!(holds_thought(&app));
     app.apply_agent_event("a1", &StreamEvent::ToolBatch(vec![call("Bash", "ls")]));

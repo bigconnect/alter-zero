@@ -102,10 +102,23 @@ read as a stuck tool.
 
 So the rows stay **empty**: the thought's text goes the moment its phase
 does, nothing stands in its place, and the call's cell lands on those rows.
-They are blank rows, which is what the floor was rejected for, but on a
-different clock: the floor's waited out a whole request, these only the model
-finishing the call it has already started — a single frame as a rule on
-ClinePass, under half a second for a long command.
+
+## Why the empty rows are under the status line
+
+Held over the status line, between the settled line and the spinner, the
+empty rows read as space reserved for whatever came next:
+
+> it should only have 1 newline it looks like it reserve some 3 newlines for
+> the "Listing ..."
+
+Measured on ClinePass, the hand-off into a quick read held them for 100 ms,
+and into a long command for 0.4 s. They cannot simply go: the rows are what
+keeps the box from rising and dropping back, the flicker this whole design
+exists to remove. So they moved **under** the status line, between it and the
+composer: the settled line, one newline, the status line, then the spare
+rows. The status line steps up when the thought settles and back down under
+the call's cell when it lands; the composer and the footer never move, and the
+status line has the one blank row above it that it has everywhere else.
 
 ## The design
 
@@ -114,11 +127,21 @@ before (`App::finish_reasoning` — history order and the usage snap are
 unchanged), but its line is not written to scrollback yet:
 
 - `App::hold_thought` keeps the settled `Reasoning` for the strip, and
-  `ui::reasoning::held_thought_lines` draws it as the block it settled from
+  `ui::reasoning::held_thought_lines` builds it as the block it settled from
   with its header settled in place — the very `Thought for …` line
   `reasoning_lines` commits — over one empty row for each row of thought the
   block showed. Same rows, so the box does not move when the phase ends, and
   the thought's text is gone with it (Ctrl+O still expands it).
+- `ui::live::strip_lines` draws those empty rows **under the status line**
+  (after whatever hangs off it — the checklist, the tip — and before its
+  trailing gap), leaving the settled line alone in the preview slot, one
+  newline over the status line. The count is unchanged, so every geometry
+  that sized the slot agrees by construction.
+- A held thought is built at the rows the region gives it, never at its full
+  ask: `strip_content_preview_rows` no longer counts it as live cells, so it
+  never flows into scrollback (where its line would be written twice — once
+  flowed, once released), and on a short terminal the spare rows go first, the
+  settled line last.
 - The boundary queues the line and its spacer on `InlineViewport::hold`
   instead of `insert_before`: committed, but held back from the next flush.
 
@@ -137,23 +160,30 @@ line commits at once rather than staying held through the next request.
 The first frame it stops holding, `Session::sync_held_thought` (run at the top
 of the draw tick and of `draw_conversation`) releases the held line into the
 queue and drops the thought, so that frame writes the line and its spacer
-above and draws the new content on the rows the thought had:
+above and draws the new content under them, the status line back below it:
 
 ```
 Thought for 0s · 50 tokens (ctrl+o to expand)     ← the settle: same row as the header
-                                                   ← the thought's three rows, empty
-
 
 ⣀⣀⣀⣀⣀⣛⣀⣀ Working… (0s · ↓ 77 tokens · esc to interrupt)
+                                                   ← the thought's three rows, empty,
+                                                     between the status line and the box
+
+
+──────────────────────────────────────────────────
+❯
 ```
 
 ```
 Thought for 0s · 50 tokens (ctrl+o to expand)     ← now in scrollback, same row
-                                                   ← its spacer
-● Skill(web-search)                                ← the cell, on the thought's rows
+
+● Skill(web-search)                                ← the cell
   ⎿  Running…
 
 ⣀⣀⣀⣀⣀⣘⣃⣀ Working… (0s · ↑ 6.4k tokens · esc to interrupt)
+
+──────────────────────────────────────────────────  ← the box, where it was
+❯
 ```
 
 **Order is kept by construction.** `InlineViewport::insert_before` releases
@@ -201,20 +231,22 @@ agent session view holds the viewed agent's thought the same way
 
 - `ui::tests::held_thought`: the held view stands on the block's rows with its
   header settled into the committed line over empty rows, the thought's text
-  gone — in a subagent's strip too; the box does not move from the
-  thought to the call (and while the call is still generating); the hold
-  gives way to a streaming `write`, the reply's first words (not whitespace),
-  a new phase, a modal and the turn's end; a record after the thought (a task
-  call, an agent's hook note) ends the hold; nothing holds a row between
-  rounds; a subagent's thought is held in its own strip.
+  gone — in a subagent's strip too; the whole strip draws the settled line,
+  one newline, the status line, then the spare rows; a held thought never
+  flows and gives up its spare rows first on a short terminal; the box does
+  not move from the thought to the call (and while the call is still
+  generating); the hold gives way to a streaming `write`, the reply's first
+  words (not whitespace), a new phase, a modal and the turn's end; a record
+  after the thought (a task call, an agent's hook note) ends the hold; nothing
+  holds a row between rounds; a subagent's thought is held in its own strip.
   `app::tests::reasoning`: the hold's lifecycle, dropped by a new turn and by
   `/clear`. Every guard in `holds_thought` and the phase reset is
   mutation-checked — each fails its test when removed.
 - `scripts/smoke.sh` **Phase 153** samples four turns ~20 times a second with
   Phase 121's double-capture rule: no hop while the hand-off is under way, the
-  settled line seen over its empty rows, the thought's text never on screen
-  beside it (a sighting confirmed 150 ms later), and never more than one blank row
-  above the status line anywhere else. The default offline turn runs on a
+  settled line seen one newline over the status line, the thought's text never
+  on screen beside it (a sighting confirmed 150 ms later), and never more than
+  one blank row above the status line. The default offline turn runs on a
   terminal with room below the box (no purge rebuild; the thought's line and
   each cell exactly once, the thought's own text never in scrollback) and on
   an 80×16 one, where the box sits on the bottom row. Two more go through the
@@ -226,13 +258,15 @@ agent session view holds the viewed agent's thought the same way
   the first three turns (the hop, no held view), the floor's binary the blank
   rows, and e97ef69's — the rows held with the thought's text in them, before
   the newest-record rule and the retry fix — all four: the lingering text in
-  the first three, the lost line in the fourth.
+  the first three, the lost line in the fourth. 5b96b4a's, whose empty rows
+  stood over the status line, fails the one-newline checks in the first three.
 - Real provider, ClinePass's `deepseek-v4.1-flash-1017`: with the thought's
   text kept in the held rows, the reported prompt at 100×30, 80×24 and 80×14
-  — no hop at the thought → `skill` hand-off. With the rows emptied, three
-  more turns (the reported prompt at 100×30 and 80×24, and one asking for
-  thought before a `bash` call): no hop, the thought's text never under its
-  settled line, and the empty rows on screen 9–20 ms at each of the four
-  hand-offs — a single frame. Past those, one blank row above the status
-  line in every mid-turn frame but one, where a reply's own blank lines
-  before a code block were its frontier.
+  — no hop at the thought → `skill` hand-off. With the rows emptied over the
+  status line, the hand-off into a quick read held them for 100 ms, into a
+  long command for 0.4 s — the reported newlines. With them under it, three
+  more turns (a thought then reads, the reported prompt, and a thought before
+  a `bash` call at 80×24): exactly one blank row above the status line in
+  every mid-turn frame, holds of 8 to 43 ms, the thought's text never under
+  its settled line, and no hop at any thought → call hand-off — the one hop
+  left was a thought giving way to the reply (above).

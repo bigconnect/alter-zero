@@ -130,11 +130,11 @@ impl App {
     }
 
     /// Hold a just-settled thought **on screen** until the next cell takes
-    /// its rows (`docs/thought-handoff.md`): the strip draws it as its
-    /// settled `Thought for …` line over empty rows — the rows the live
-    /// block stood on, its text gone with the phase — while the boundary
-    /// holds that line back from scrollback. The thought is recorded already
-    /// ([`finish_reasoning`]); this is display only.
+    /// its rows (`docs/thought-handoff.md`): the strip draws its settled
+    /// `Thought for …` line, one newline, the status line, then the rows the
+    /// live block stood on, empty — its text gone with the phase — while the
+    /// boundary holds that line back from scrollback. The thought is recorded
+    /// already ([`finish_reasoning`]); this is display only.
     ///
     /// The backend settles a phase at the round's first tool-call piece, but
     /// the call has a cell only once its batch is announced: collapsing the
