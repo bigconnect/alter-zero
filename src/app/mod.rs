@@ -101,7 +101,7 @@ pub use self::mcp_menu::{McpAuthView, McpMenu, McpPage, McpServerAction, server_
 pub use self::model_picker::{ModelFetchError, ModelLoad, ModelPicker};
 pub use self::permission::PermissionPrompt;
 pub use self::queue::QueuedTurn;
-pub use self::reasoning::Reasoning;
+pub use self::reasoning::{Reasoning, THOUGHT_SETTLE_GRACE, ThinkingClock};
 // Crate-internal: `agents::AgentRun` runs the same reasoning-token snap over
 // its own transcript (`docs/agent-view-streaming.md`).
 pub use self::config_review::{
@@ -244,13 +244,12 @@ pub struct App {
     /// when the display is off (`ALTER_ZERO_SHOW_THINKING=0`), because the
     /// boundary then never opens one. See `docs/thinking-stream.md`.
     reasoning: Option<String>,
-    /// The thought that just settled, **held on screen** until the next cell
-    /// takes its rows: the strip draws it as its settled `Thought for …`
-    /// line over the thought's tail, standing on the rows the live block
-    /// did, while the boundary holds that line back from scrollback. Set and
-    /// dropped by the boundary ([`hold_thought`](App::hold_thought)); see
-    /// `docs/thought-handoff.md`.
-    held_thought: Option<Reasoning>,
+    /// The round's provider `reasoning_tokens`, kept when its usage frame
+    /// landed while the round's last phase was still open — ended, but
+    /// waiting out its settle grace so the next cell can take its rows
+    /// (`docs/thought-handoff.md`). Snapped over the round's thoughts the
+    /// moment that phase is recorded ([`finish_reasoning`](App::finish_reasoning)).
+    round_reasoning_due: Option<u64>,
     /// Where this round's settled [`HistoryItem::Reasoning`] items landed in
     /// [`history`](Self::history) — the snap targets for the round's usage
     /// frame, which reports the *real* `reasoning_tokens` the cells were built

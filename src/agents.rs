@@ -357,6 +357,13 @@ pub struct AgentRun {
     /// `reasoning_tokens` (`app::reasoning::snap_reasoning_tokens`). Cleared by
     /// each frame — one frame ends one round.
     round_reasoning: Vec<usize>,
+    /// The round's provider `reasoning_tokens`, kept when its usage frame
+    /// landed while the round's last phase was still open — ended, but
+    /// waiting out its settle grace in the session view
+    /// (`docs/thought-handoff.md`). Snapped over the round's thoughts the
+    /// moment that phase is recorded ([`finish_reasoning`](Self::finish_reasoning)),
+    /// the main session's rule.
+    round_reasoning_due: Option<u64>,
     /// Where the reply attempt now streaming began on
     /// [`history`](Self::history) — the mark a [`StreamEvent::Retrying`]
     /// withdraws back to, taken at the attempt's first piece of output since
@@ -464,6 +471,7 @@ impl AgentRun {
             paragraph: ParagraphStart::default(),
             reasoning: None,
             round_reasoning: Vec::new(),
+            round_reasoning_due: None,
             attempt_floor: None,
             thinking: None,
             command_elapsed: None,
@@ -828,9 +836,15 @@ impl AgentRun {
                 // `Thought for …` cells trade their token estimate for
                 // the provider's own `reasoning_tokens`, the main session's
                 // snap over this agent's transcript
-                // (`docs/thinking-stream.md`).
-                let targets = std::mem::take(&mut self.round_reasoning);
-                crate::app::snap_reasoning_tokens(&mut self.history, &targets, usage.reasoning);
+                // (`docs/thinking-stream.md`). A phase still open here has
+                // ended and waits out its settle grace, so the count waits
+                // for it to be recorded (`docs/thought-handoff.md`).
+                if self.reasoning.is_some() {
+                    self.round_reasoning_due = Some(usage.reasoning);
+                } else {
+                    let targets = std::mem::take(&mut self.round_reasoning);
+                    crate::app::snap_reasoning_tokens(&mut self.history, &targets, usage.reasoning);
+                }
                 self.usage_tokens += usage.total();
                 self.tokens = self.usage_tokens;
                 // Its session view's `/context` page (docs/context-usage.md).
@@ -1178,6 +1192,7 @@ impl AgentRun {
         self.streaming = None;
         self.paragraph = ParagraphStart::default();
         self.reasoning = None;
+        self.round_reasoning_due = None;
         self.thinking = None;
         self.drafts.clear();
         let mut records = 0;
@@ -1236,6 +1251,7 @@ impl AgentRun {
         self.turn_usage_cached = 0;
         self.turn_usage_cache_write = 0;
         self.round_reasoning.clear();
+        self.round_reasoning_due = None;
         self.user_messages.clear();
         self.drafts.clear();
     }
@@ -1370,24 +1386,38 @@ impl AgentRun {
     /// `None` — recording nothing — when no phase was open, or when it
     /// produced no text: some providers open and close one without a single
     /// delta, and a `Thought for 0s` cell for that is noise. The main
-    /// session's rule exactly (`docs/thinking-stream.md`).
+    /// session's rule exactly (`docs/thinking-stream.md`), down to a usage
+    /// frame that landed during the phase's settle grace, which is applied
+    /// here (`docs/thought-handoff.md`).
     pub fn finish_reasoning(&mut self, secs: u64) -> Option<crate::app::Reasoning> {
         self.thinking = None;
         let text = self.reasoning.take()?;
-        if text.trim().is_empty() {
-            return None;
-        }
-        let reasoning = crate::app::Reasoning {
-            tokens: crate::app::count_tokens(&text),
-            text,
-            secs,
-            timestamp: String::new(),
+        let recorded = if text.trim().is_empty() {
+            None
+        } else {
+            let reasoning = crate::app::Reasoning {
+                tokens: crate::app::count_tokens(&text),
+                text,
+                secs,
+                timestamp: String::new(),
+            };
+            // Remember where it landed so this round's usage frame can snap
+            // its estimate to the provider's own count.
+            self.round_reasoning.push(self.history.len());
+            self.history.push(HistoryItem::Reasoning(reasoning));
+            Some(self.history.len() - 1)
         };
-        // Remember where it landed so this round's usage frame can snap its
-        // estimate to the provider's own count.
-        self.round_reasoning.push(self.history.len());
-        self.history.push(HistoryItem::Reasoning(reasoning.clone()));
-        Some(reasoning)
+        // A usage frame that landed while the phase waited out its settle
+        // grace is applied now, before the cell is handed back, so the line
+        // the session view commits carries the provider's own count.
+        if let Some(reasoning_tokens) = self.round_reasoning_due.take() {
+            let targets = std::mem::take(&mut self.round_reasoning);
+            crate::app::snap_reasoning_tokens(&mut self.history, &targets, reasoning_tokens);
+        }
+        match self.history.get(recorded?) {
+            Some(HistoryItem::Reasoning(reasoning)) => Some(reasoning.clone()),
+            _ => None,
+        }
     }
 
     /// Settle an open phase from the injected [`thinking`](Self::thinking)
@@ -5216,6 +5246,31 @@ mod tests {
             panic!("the cell is on the transcript");
         };
         assert_eq!(r.tokens, 169, "snapped to the provider's own count");
+    }
+
+    #[test]
+    fn a_usage_frame_that_lands_before_the_thought_settles_snaps_it_once_recorded() {
+        // The viewed agent's ended phase stays open through its settle grace
+        // (docs/thought-handoff.md), so the round's frame can land first: its
+        // count waits for the thought, the main session's rule.
+        let mut run = AgentRun::new("a1", "d", GENERAL_PURPOSE, "p", false);
+        run.begin_reasoning();
+        run.apply(&StreamEvent::ThinkingChunk(
+            "a long chain of thought".into(),
+        ));
+        run.apply(&StreamEvent::Usage(TokenUsage {
+            input: 10,
+            output: 20,
+            cached: 0,
+            cache_write: 0,
+            reasoning: 169,
+        }));
+        let settled = run.finish_reasoning(2).expect("text settles");
+        let HistoryItem::Reasoning(r) = &run.history[1] else {
+            panic!("the cell is on the transcript");
+        };
+        assert_eq!(r.tokens, 169, "snapped once it was recorded");
+        assert_eq!(settled.tokens, 169, "and the line the view commits says so");
     }
 
     #[test]

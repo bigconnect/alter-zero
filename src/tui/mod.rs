@@ -63,7 +63,7 @@ use std::time::Instant;
 use ratatui::crossterm::event::EventStream;
 
 use alter_zero::agents::{AgentEvent, AgentRegistry};
-use alter_zero::app::App;
+use alter_zero::app::{App, ThinkingClock};
 use alter_zero::background::{BackgroundRegistry, BgEvent};
 use alter_zero::checkpoint::CheckpointStore;
 use alter_zero::clipboard::ClipboardLease;
@@ -169,12 +169,13 @@ pub(crate) struct Session<'t> {
     bg_clocks: HashMap<String, Instant>,
     /// When each running subagent started, so the roster's elapsed ticks.
     agent_clocks: HashMap<String, Instant>,
-    /// When each subagent's **open thinking phase** started — the per-agent
-    /// sibling of `StatusClocks::thinking_start`, so its session view's
-    /// status line shows `Thinking for Ns` and the settle knows the phase's
-    /// wall-clock. An entry exists only while that agent is thinking
-    /// (`docs/agent-view-streaming.md`).
-    agent_thinking_clocks: HashMap<String, Instant>,
+    /// Each subagent's **open thinking phase**'s clock — the per-agent
+    /// sibling of `StatusClocks::thinking`, so its session view's status line
+    /// shows `Thinking for Ns` and the settle knows the phase's wall-clock.
+    /// An entry exists only while that agent's phase is open: thinking, or
+    /// ended and waiting out its settle grace in the session view
+    /// (`docs/agent-view-streaming.md`, `docs/thought-handoff.md`).
+    agent_thinking_clocks: HashMap<String, ThinkingClock>,
     /// When each subagent's **current running command** started — the
     /// per-agent sibling of `StatusClocks::command_start`, injected each
     /// frame as `AgentRun::command_elapsed` so its session view's `bash`
@@ -420,8 +421,11 @@ pub(crate) struct StatusClocks {
     /// When the turn was submitted — the elapsed timer and the verb's shimmer
     /// phase. `None` when no turn is in flight.
     turn_start: Option<Instant>,
-    /// When the current thinking phase began (`None` outside one).
-    thinking_start: Option<Instant>,
+    /// The current thinking phase's clock (`None` outside one): when it
+    /// began, and — once its `ThinkingEnd` arrived — when it ended, while its
+    /// live block waits out its settle grace for the next cell
+    /// (`docs/thought-handoff.md`).
+    thinking: Option<ThinkingClock>,
     /// When the **current running command** (a model `bash` call, set at its
     /// `ToolStart`; or a `!` shell run, set in `Session::run_shell`) began —
     /// cleared when it resolves (`ToolEnd`/`ToolBackgrounded`) and at each turn
@@ -443,7 +447,7 @@ impl StatusClocks {
     fn started_now() -> Self {
         Self {
             turn_start: None,
-            thinking_start: None,
+            thinking: None,
             command_start: None,
             loop_start: Instant::now(),
         }
@@ -454,7 +458,7 @@ impl StatusClocks {
     /// hint clock at its `ToolStart`).
     fn start_turn(&mut self) {
         self.turn_start = Some(Instant::now());
-        self.thinking_start = None;
+        self.thinking = None;
         self.command_start = None;
     }
 
@@ -462,6 +466,6 @@ impl StatusClocks {
     /// alone: each resolution path clears it explicitly.
     fn end_turn(&mut self) {
         self.turn_start = None;
-        self.thinking_start = None;
+        self.thinking = None;
     }
 }

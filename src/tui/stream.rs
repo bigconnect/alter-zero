@@ -30,9 +30,11 @@
 //! queue (the return's draw flushes them); only an open agent session view
 //! defers to a history rebuild (invariant 4).
 
+use std::time::Instant;
+
 use ratatui::text::Line;
 
-use alter_zero::app::{CONNECTION_LOST_NOTICE, Role, ToastKind, View, group_kind};
+use alter_zero::app::{CONNECTION_LOST_NOTICE, Role, ThinkingClock, ToastKind, View, group_kind};
 use alter_zero::stream::StreamEvent;
 use alter_zero::ui;
 
@@ -48,6 +50,14 @@ impl Session<'_> {
         // withdraws back to (docs/offline.md *A connection lost mid-reply*).
         // Every event, before it is folded.
         self.app.track_attempt(&event);
+        // A thought that has ended waits, briefly, for whatever takes its
+        // rows (docs/thought-handoff.md). An event that draws or records
+        // something settles it first, so its `Thought for …` line commits
+        // ahead of what the event commits, and the frame that shows the
+        // event's cell shows the line above it.
+        if self.thought_ending() && event.settles_ended_thought() {
+            self.settle_reasoning();
+        }
         let width = self.term.screen().width;
         let committing = self.commits_allowed();
         match event {
@@ -404,7 +414,7 @@ impl Session<'_> {
                 // (it is live-only) — but with the display on, open the
                 // reasoning buffer so the strip previews the chain-of-thought
                 // as it streams (docs/thinking-stream.md).
-                self.clocks.thinking_start = Some(std::time::Instant::now());
+                self.clocks.thinking = Some(ThinkingClock::start(Instant::now()));
                 // The `/settings` **Hide thinking** knob, read per phase — so
                 // flipping it mid-session takes effect on the very next one
                 // (docs/settings.md).
@@ -449,6 +459,12 @@ impl Session<'_> {
                 // its withheld last line — and the cell sits under it, under
                 // the blank spacer the committed cell will keep.
                 if self.app.push_tool_call_fragment(&piece) {
+                    // The piece opened a previewed `write`, whose cell takes
+                    // the slot: an ended thought settles now, its line
+                    // committing above that cell (docs/thought-handoff.md).
+                    if self.thought_ending() {
+                        self.settle_reasoning();
+                    }
                     self.flush_segment(committing, width);
                     self.render.reset();
                 }
@@ -462,15 +478,18 @@ impl Session<'_> {
                 false
             }
             StreamEvent::ThinkingEnd => {
-                // The phase is over: record the `Thought for … · … tokens`
-                // cell here, before the round's reply text or tool calls
-                // exist, which is what puts it ahead of them in scrollback and
-                // history alike (docs/thinking-stream.md) — and **hold** it on
-                // the block's rows until the next cell takes them. The phase
-                // ends at the round's first tool-call piece, but the call has
-                // a cell only once its batch is announced; collapsing at once
-                // lifted the box until it landed (docs/thought-handoff.md).
-                self.hold_settled_reasoning();
+                // The phase is over, but its live block stays up through a
+                // short settle grace (docs/thought-handoff.md). The backend
+                // ends a phase at the round's first tool-call piece, and the
+                // call has a cell only once its batch lands a few frames
+                // later: collapsing the block at once lifted the box for
+                // those frames, then dropped it back. The next event that
+                // draws or records something settles it (the top of this
+                // function), or the draw tick once the grace is over. Either
+                // way the `Thought for … · … tokens` cell still lands ahead
+                // of the round's reply text and calls, in scrollback and
+                // history alike (docs/thinking-stream.md).
+                self.end_reasoning_phase();
                 false
             }
             StreamEvent::StreamDone => self.on_stream_done(committing, width),
@@ -483,16 +502,9 @@ impl Session<'_> {
                 // settling, so its clock stops, and rows it had committed are
                 // rebuilt away — then the retry shows live in the status line.
                 let shown = self.render.has_committed();
-                // A held thought is left alone here (docs/thought-handoff.md).
-                // One this attempt produced is withdrawn with the attempt, and
-                // that withdrawal rebuilds the screen below, dropping the held
-                // line unwritten; one an earlier round produced — a thought
-                // whose round recorded only a task call — is that round's, and
-                // commits when it is let go. Dropping every held line here
-                // lost that one, and an agent session view's too.
                 let withdrawn = self.app.withdraw_attempt();
                 self.render.reset();
-                self.clocks.thinking_start = None;
+                self.clocks.thinking = None;
                 self.app.set_retry(attempt, max);
                 // Said only where it was seen: inside an agent's session view
                 // the main reply is not on screen, and a toast there would
@@ -648,15 +660,41 @@ impl Session<'_> {
         true
     }
 
+    /// The phase's `ThinkingEnd`: its clock stops, but a block on screen stays
+    /// up through [`THOUGHT_SETTLE_GRACE`](alter_zero::app::THOUGHT_SETTLE_GRACE)
+    /// for the next cell to take its rows (`docs/thought-handoff.md`). The
+    /// next event that draws or records something settles it, or the draw
+    /// tick once the grace is over. With the display off no phase was opened,
+    /// so there is nothing to keep up: it settles at once, which only stops
+    /// the clock.
+    fn end_reasoning_phase(&mut self) {
+        if self.app.reasoning().is_some()
+            && let Some(clock) = self.clocks.thinking.as_mut()
+        {
+            clock.end(Instant::now());
+        } else {
+            self.settle_reasoning();
+        }
+    }
+
+    /// Whether a thinking phase has ended and its block is waiting out its
+    /// settle grace ([`Session::end_reasoning_phase`]).
+    fn thought_ending(&self) -> bool {
+        self.clocks.thinking.is_some_and(|clock| clock.has_ended())
+    }
+
     /// Close an open thinking phase: stop the thinking clock, record the phase
     /// as a [`crate::app::Reasoning`] item, and commit its collapsed
     /// `Thought for … · … tokens` cell — the live block that was previewing
     /// it goes with it (`docs/thinking-stream.md`).
     ///
-    /// The one settle helper, called from all three places a phase can end: its
-    /// own `ThinkingEnd`, an Esc interrupt, and a backend error. Calling it
-    /// *before* those two record anything of their own is what keeps the thought
-    /// ahead of the partial reply it preceded.
+    /// The one settle helper, called from every place a phase can end: after
+    /// its own `ThinkingEnd`, by the next event that draws or records
+    /// something or by the draw tick once its settle grace is over
+    /// ([`Session::end_reasoning_phase`], `docs/thought-handoff.md`); an Esc
+    /// interrupt; and a backend error. Calling it *before* those record
+    /// anything of their own is what keeps the thought ahead of the partial
+    /// reply it preceded.
     ///
     /// A no-op when no phase is open (the display is off, or the phase produced
     /// no text) — so the sites need no condition of their own.
@@ -672,26 +710,8 @@ impl Session<'_> {
     /// as the cell commits, so the box must not rise off the bottom
     /// (invariant 3).
     pub(crate) fn settle_reasoning(&mut self) {
-        self.settle_reasoning_with(false);
-    }
-
-    /// [`Session::settle_reasoning`] at the phase's own end (`ThinkingEnd`),
-    /// with the committed line **held** (`docs/thought-handoff.md`): the
-    /// strip keeps the thought on the block's rows — its header settled into
-    /// that very line — and the line reaches scrollback the frame the next
-    /// cell takes those rows ([`Session::sync_held_thought`]), or ahead of
-    /// whatever commits first. An Esc or an error settles at once instead:
-    /// the turn is ending, and its own commits follow straight after.
-    fn hold_settled_reasoning(&mut self) {
-        self.settle_reasoning_with(true);
-    }
-
-    fn settle_reasoning_with(&mut self, hold: bool) {
-        let secs = self
-            .clocks
-            .thinking_start
-            .map_or(0, |start| start.elapsed().as_secs());
-        self.clocks.thinking_start = None;
+        let clock = self.clocks.thinking.take();
+        let secs = clock.map_or(0, |clock| clock.elapsed(Instant::now()).as_secs());
         // Nothing was thought — no phase open (the display is off), or one that
         // streamed no text. Drop it and leave the reply alone: flushing its
         // segment would split the paragraph in two for a cell that will never
@@ -713,8 +733,14 @@ impl Session<'_> {
         // a no-op anyway for the common case (a model that reasons before it
         // answers). It stays because this is also the settle point for an
         // Esc/error mid-phase, and for a phase whose block never showed.
-        self.flush_segment(committing, width);
-        self.render.reset();
+        // Not for a phase that had ended: its text was finalised as the block
+        // went up, and what was buffered during its settle grace is the start
+        // of the reply after it — blank, or it would have settled the phase
+        // sooner — which stays for that reply (docs/thought-handoff.md).
+        if !clock.is_some_and(|clock| clock.has_ended()) {
+            self.flush_segment(committing, width);
+            self.render.reset();
+        }
         let Some(reasoning) = self.app.finish_reasoning(secs) else {
             return;
         };
@@ -728,14 +754,9 @@ impl Session<'_> {
         if committing {
             let height = self.live_region_height();
             self.term.set_view_height(height);
-            let mut lines = ui::reasoning_lines(&reasoning, width);
-            lines.push(Line::default());
-            if hold {
-                self.term.hold(lines);
-                self.app.hold_thought(reasoning);
-            } else {
-                self.term.insert_before(lines);
-            }
+            self.term
+                .insert_before(ui::reasoning_lines(&reasoning, width));
+            self.term.insert_before(vec![Line::default()]);
         }
     }
 

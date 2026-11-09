@@ -292,8 +292,14 @@ impl App {
         }
         // One frame ends one round: this is where the round's `Thought for
         // …` cells trade their token estimate for the provider's own
-        // `reasoning_tokens` (docs/thinking-stream.md).
-        self.snap_round_reasoning(usage.reasoning);
+        // `reasoning_tokens` (docs/thinking-stream.md). A phase still open
+        // here has ended and waits out its settle grace, so the count waits
+        // for it to be recorded (docs/thought-handoff.md).
+        if self.reasoning().is_some() {
+            self.round_reasoning_due = Some(usage.reasoning);
+        } else {
+            self.snap_round_reasoning(usage.reasoning);
+        }
         // The `/context` page's Last request and Since launch rows
         // (docs/context-usage.md).
         self.last_usage = Some(*usage);

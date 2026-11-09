@@ -151,7 +151,11 @@ another turn's clock would be a lie.
 
 `Session::settle_agent_reasoning` is the one settle helper — the sibling of
 `Session::settle_reasoning` — called from all three places a phase can end:
-its own `ThinkingEnd`, the agent's `Error`, and a user stop. It records the
+its own `ThinkingEnd`, the agent's `Error`, and a user stop. While the agent's
+session view is up, its `ThinkingEnd` first waits out the main session's short
+settle grace — the block stays up until the agent's next event that draws or
+records something, or the roster tick once the grace is over — so the next
+cell lands on its rows (`docs/thought-handoff.md`). It records the
 `HistoryItem::Reasoning` on the **agent's** transcript and, when that agent's
 session view is up, commits the collapsed cell (reseat before you commit).
 `ThinkingStart` flushes the agent's streamed segment first — flush before you

@@ -13,7 +13,86 @@
 //! [`App::begin_reasoning`], so no buffer opens, [`App::push_thinking`] only
 //! counts (exactly as before), and no cell is ever recorded.
 
+use std::time::Instant;
+
 use super::*;
+
+/// How long a thinking phase's live block stays up **after the phase ends**,
+/// waiting for the round's next cell to take its rows
+/// (`docs/thought-handoff.md`).
+///
+/// The backend ends a phase at the round's first tool-call piece, but the call
+/// has a cell only once its batch is announced. Collapsing the `● Thinking…`
+/// block at that piece lifted the box by the block's rows until the cell
+/// landed, then dropped it back: the flicker between a quick think and a tool
+/// call. Measured live, a call's arguments finish 17–120 ms after a short
+/// call's thought ends, and up to 642 ms after one carrying a long path or URL
+/// (the web-search skill's commands), so the block waits up to a second for
+/// them. Only the call's own pieces and blank text keep it waiting: anything
+/// that draws or records something settles it at once
+/// ([`StreamEvent::settles_ended_thought`]). Past this it settles anyway,
+/// since a block left up longer would be claiming a thought that is over.
+///
+/// [`StreamEvent::settles_ended_thought`]: crate::stream::StreamEvent::settles_ended_thought
+pub const THOUGHT_SETTLE_GRACE: Duration = Duration::from_secs(1);
+
+/// One thinking phase's wall clock, kept at the I/O boundary (time is impure):
+/// when the phase opened and, once its `ThinkingEnd` arrived, when it ended.
+///
+/// An ended phase stays **open** through [`THOUGHT_SETTLE_GRACE`], its live
+/// block still up, so this is what says how long it really ran — the status
+/// line's `Thinking for Ns` and the settled `Thought for Ns` line both read
+/// [`elapsed`](Self::elapsed) — and when the wait is over
+/// ([`settle_due`](Self::settle_due)). Every reading takes `now` from the
+/// caller, so the rule is testable without a clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThinkingClock {
+    started: Instant,
+    ended: Option<Instant>,
+}
+
+impl ThinkingClock {
+    /// A phase that opened at `now`.
+    #[must_use]
+    pub const fn start(now: Instant) -> Self {
+        Self {
+            started: now,
+            ended: None,
+        }
+    }
+
+    /// The phase's `ThinkingEnd` arrived at `now`: its time stops and its
+    /// grace begins. A second end changes nothing, since the first is when
+    /// the model stopped thinking.
+    pub fn end(&mut self, now: Instant) {
+        if self.ended.is_none() {
+            self.ended = Some(now);
+        }
+    }
+
+    /// Whether the phase has ended and is waiting out its grace.
+    #[must_use]
+    pub const fn has_ended(&self) -> bool {
+        self.ended.is_some()
+    }
+
+    /// How long the phase ran: up to `now` while it runs, frozen at its end
+    /// after, so a grace never counts as thinking.
+    #[must_use]
+    pub fn elapsed(&self, now: Instant) -> Duration {
+        self.ended
+            .unwrap_or(now)
+            .saturating_duration_since(self.started)
+    }
+
+    /// Whether an ended phase has waited its whole [`THOUGHT_SETTLE_GRACE`] by
+    /// `now`, and settles whatever comes next. Never while it still thinks.
+    #[must_use]
+    pub fn settle_due(&self, now: Instant) -> bool {
+        self.ended
+            .is_some_and(|ended| now.saturating_duration_since(ended) >= THOUGHT_SETTLE_GRACE)
+    }
+}
 
 /// One settled thinking phase: the model's whole chain-of-thought for it, how
 /// long it ran, and what it cost.
@@ -101,63 +180,45 @@ impl App {
     /// Returns `None` — recording nothing — when no phase was open, or when
     /// the phase produced no text: some providers open and close one without a
     /// single delta, and a `Thought for 0s` cell for that is noise.
+    ///
+    /// A usage frame that landed while the phase waited out its settle grace
+    /// ([`THOUGHT_SETTLE_GRACE`], `docs/thought-handoff.md`) is applied here,
+    /// once the round's last thought is recorded, and before the cell is
+    /// handed back: the line the boundary commits carries the provider's own
+    /// count.
     pub fn finish_reasoning(&mut self, secs: u64) -> Option<Reasoning> {
         let text = self.reasoning.take()?;
-        if text.trim().is_empty() {
-            return None;
-        }
-        let reasoning = Reasoning {
-            tokens: count_tokens(&text),
-            text,
-            secs,
-            timestamp: self.now_stamp(),
+        let recorded = if text.trim().is_empty() {
+            None
+        } else {
+            let reasoning = Reasoning {
+                tokens: count_tokens(&text),
+                text,
+                secs,
+                timestamp: self.now_stamp(),
+            };
+            // Remember where it landed so this round's usage frame can snap
+            // its estimate to the provider's own count.
+            self.round_reasoning.push(self.history.len());
+            self.history.push(HistoryItem::Reasoning(reasoning));
+            Some(self.history.len() - 1)
         };
-        // Remember where it landed so this round's usage frame can snap its
-        // estimate to the provider's own count.
-        self.round_reasoning.push(self.history.len());
-        self.history.push(HistoryItem::Reasoning(reasoning.clone()));
-        Some(reasoning)
+        if let Some(reasoning_tokens) = self.round_reasoning_due.take() {
+            self.snap_round_reasoning(reasoning_tokens);
+        }
+        match self.history.get(recorded?) {
+            Some(HistoryItem::Reasoning(reasoning)) => Some(reasoning.clone()),
+            _ => None,
+        }
     }
 
     /// Drop an open thinking phase without recording it — the `/clear` wipe
-    /// and the fresh-turn reset. The rounds' snap targets go with it.
+    /// and the fresh-turn reset. The rounds' snap targets go with it, and so
+    /// does a usage count that was waiting for the phase.
     pub(super) fn drop_reasoning(&mut self) {
         self.reasoning = None;
         self.round_reasoning.clear();
-        // A thought held for the last turn's next cell has nothing left to
-        // hand over to (docs/thought-handoff.md).
-        self.held_thought = None;
-    }
-
-    /// Hold a just-settled thought **on screen** until the next cell takes
-    /// its rows (`docs/thought-handoff.md`): the strip draws it as its
-    /// settled `Thought for …` line over the thought's tail — the rows the
-    /// live block stood on — while the boundary holds that line back from
-    /// scrollback. The thought is recorded already ([`finish_reasoning`]);
-    /// this is display only.
-    ///
-    /// The backend settles a phase at the round's first tool-call piece, but
-    /// the call has a cell only once its batch is announced: collapsing the
-    /// block at once lifted the box by its rows for as long as the call took
-    /// to generate, and dropped it back when the cell landed — the flicker
-    /// reported between a quick think and a `skill` call.
-    ///
-    /// [`finish_reasoning`]: App::finish_reasoning
-    pub fn hold_thought(&mut self, thought: Reasoning) {
-        self.held_thought = Some(thought);
-    }
-
-    /// The thought held on screen ([`hold_thought`](App::hold_thought)), if
-    /// any — what the strip draws while nothing else has taken its rows.
-    #[must_use]
-    pub const fn held_thought(&self) -> Option<&Reasoning> {
-        self.held_thought.as_ref()
-    }
-
-    /// Let the held thought go — its line has committed, or the screen was
-    /// rebuilt from history, which carries it.
-    pub fn drop_held_thought(&mut self) {
-        self.held_thought = None;
+        self.round_reasoning_due = None;
     }
 
     /// Replace this round's reasoning cells' token estimates with the

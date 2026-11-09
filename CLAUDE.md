@@ -980,8 +980,10 @@ collapse) but expands in Ctrl+O under that same dim line, minus the hint since
 the expansion has none to make room for; `HistoryItem::Reasoning` records it, the rollout keeps it
 across a `/resume`, `context::context_messages` **skips** it (a Chat
 Completions request has nowhere to put a previous round's chain-of-thought,
-so Ctrl+D shows no trace either), the settle points are `ThinkingEnd`/Esc/a
-backend error via the one `tui::stream::Session::settle_reasoning`, the
+so Ctrl+D shows no trace either), the settle points are `ThinkingEnd` (once
+its short settle grace hands the block's rows to the next cell,
+`docs/thought-handoff.md`)/Esc/a backend error via the one
+`tui::stream::Session::settle_reasoning`, the
 **block goes up over a finalised segment** — `ThinkingStart` flushes the run
 of assistant text before it (invariant 4's "flush before you interleave",
 gated on the display), so the header sits under the same blank spacer the
@@ -1038,30 +1040,38 @@ blank rows the next content lands on — so the preview never loses more
 rows than a step committed, the invariant the differential harness now
 carries over the fuzz corpus at every width, with `matches_up_to_padding`
 as the contract's one tolerance — and the **thought hand-off** in
-`docs/thought-handoff.md`: the backend settles a thinking phase at the round's
+`docs/thought-handoff.md`: the backend ends a thinking phase at the round's
 first tool-call piece while the call gets a cell only at its batch, so
 collapsing the `● Thinking…` block at once sat the box up to three rows high
-for as long as the call took to generate and dropped it back when the cell
-landed (the flicker reported between a thought and a `skill` call; present in
-v0.18.0 too). The block now **settles in place** — `App::hold_thought` keeps
-the settled `Reasoning`, `ui::reasoning::held_thought_lines` draws its
-`Thought for …` line over the same tail of thought on the block's rows — while
-the boundary holds that line back from scrollback (`InlineViewport::hold`;
-any later `insert_before` releases it first, so scrollback order matches
-history by construction); `ui::holds_thought` says when something else has
-taken the slot — a call's cell, a streaming `write`, the reply's first words,
-a new phase, a modal, the turn's end, or any record after the thought (a
-task call has no cell, so its round leaves nothing to land on the rows) — and
-`Session::sync_held_thought` releases the line in that frame, the new content
-landing on the tail's rows, while only a purge rebuild drops it unwritten
-(history carries it; a `Retrying` leaves it alone, since the withdrawal's own
-rebuild clears a thought the failed attempt produced and an earlier round's
-must still commit) and the agent session view holds its viewed agent's
-thought the same way. A preview **floor** padding every hand-off with blank
-rows was tried first and replaced: between rounds it held three empty lines
-over the status line for as long as the next request took; `smoke.sh` Phase
-153 pins no hop *and* one blank row above the status line mid-turn, through
-the dummy and through the real backend against a paced stub; the **clickable OSC 8 links** (every URL an assistant
+until the cell landed a few frames later and dropped it back (the flicker
+reported between a quick think and a tool call; present in v0.18.0 too). Its
+`ThinkingEnd` now only stops the phase's clock (`app::ThinkingClock`, the
+boundary's `StatusClocks::thinking`): the phase stays open, its block up and
+unchanged, for at most `app::THOUGHT_SETTLE_GRACE` (a second: a call's
+arguments are complete 17–120 ms after its thought, and up to 642 ms for a
+command carrying a long path, measured live; 300 ms left the web-search
+hand-offs bouncing), and the first event that draws or records something
+(`StreamEvent::settles_ended_thought`, or a piece opening a previewed `write`)
+runs the ordinary `Session::settle_reasoning` **before** its own work, so the
+plain `Thought for …` line commits ahead of it and the next cell lands on the
+block's rows in the same frame; the draw tick settles it once the grace is
+over. Nothing is held anywhere — the thought is not in history until it
+settles, so a rebuild during the grace needs no care — and three details
+follow from the phase staying open: the round's `Usage` frame, which the
+backend sends before the batch, waits for the thought to be recorded
+(`round_reasoning_due`, on `App` and `AgentRun`) so the committed line carries
+the provider's count; a `Retrying` drops the open phase with its void attempt
+rather than settling it; and blank text that arrives meanwhile stays for the
+reply. The agent session view does the same off its per-agent clocks, the
+roster tick settling a viewed agent's due thought. Two fixes were replaced: a
+preview **floor** held blank rows (three empty lines over the status line
+between rounds), and a **hold** settled the header in place over the
+thought's tail and held the line back from scrollback until the next cell
+landed — the settled line standing over the thought for as long as a slow call
+took to generate, the look reported against it; `smoke.sh` Phase 153 pins no
+hop for a hand-off inside the grace, the settled line never on screen with the
+thought, and one blank row above the status line mid-turn, through the real
+backend against a paced stub and through the dummy; the **clickable OSC 8 links** (every URL an assistant
 reply shows — a bare URL in prose/lists/table cells, inline/fenced/indented
 code, a heading, or a `[text](url)` target — is painted inside an OSC 8
 hyperlink carrying the whole URL, so a wrapped URL's every fragment opens the

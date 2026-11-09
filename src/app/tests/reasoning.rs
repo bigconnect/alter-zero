@@ -2,6 +2,8 @@
 //! it settles into, and the provider's reasoning-token snap.
 //! See `docs/thinking-stream.md`.
 
+use std::time::Instant;
+
 use super::*;
 
 /// The `Reasoning` at history index `i` (panics if it is not one).
@@ -262,38 +264,143 @@ fn a_new_turn_starts_with_no_stale_phase() {
     assert_eq!(app.reasoning(), None);
 }
 
-#[test]
-fn a_held_thought_is_kept_until_it_is_dropped() {
-    // The settled phase stays on screen until the next cell takes its rows
-    // (docs/thought-handoff.md): `App` keeps it for the strip to draw, and
-    // the boundary drops it when the held line commits.
-    let mut app = App::new();
-    app.begin_stream();
-    app.begin_reasoning();
-    app.push_thinking("the plan");
-    let thought = app.finish_reasoning(2).expect("a thought");
-    assert!(app.held_thought().is_none(), "settling alone holds nothing");
-    app.hold_thought(thought.clone());
-    assert_eq!(app.held_thought(), Some(&thought));
-    app.drop_held_thought();
-    assert!(app.held_thought().is_none());
+/// A usage frame carrying `reasoning` provider tokens, the rest arbitrary.
+fn reasoning_usage(reasoning: u64) -> crate::stream::TokenUsage {
+    crate::stream::TokenUsage {
+        input: 40,
+        output: 200,
+        reasoning,
+        ..crate::stream::TokenUsage::default()
+    }
 }
 
 #[test]
-fn nothing_is_held_across_a_new_turn_or_a_clear() {
-    let held = |app: &mut App| {
-        app.begin_stream();
-        app.begin_reasoning();
-        app.push_thinking("the plan");
-        let thought = app.finish_reasoning(0).expect("a thought");
-        app.hold_thought(thought);
-    };
+fn a_usage_frame_that_lands_before_its_thought_settles_snaps_it_once_recorded() {
+    // A phase that has ended stays open through its settle grace, so the next
+    // cell can take its rows (docs/thought-handoff.md) — and the round's usage
+    // frame can land inside that grace, before the thought is recorded. Its
+    // count waits for the thought instead of missing it.
     let mut app = App::new();
-    held(&mut app);
     app.begin_stream();
-    assert!(app.held_thought().is_none(), "a fresh turn holds nothing");
+    app.begin_reasoning();
+    app.push_thinking("a short thought");
+    app.apply_usage(&reasoning_usage(169));
+    let settled = app.finish_reasoning(1).expect("a thought");
+    assert_eq!(thought_at(&app, 0).tokens, 169);
+    assert_eq!(
+        settled.tokens, 169,
+        "the cell handed back for the line to commit carries it too"
+    );
+}
+
+#[test]
+fn a_waiting_usage_count_splits_over_the_whole_round() {
+    // The round thought twice; its frame landed while the second phase was
+    // still settling. The count covers both phases, split by weight.
     let mut app = App::new();
-    held(&mut app);
-    app.clear_conversation();
-    assert!(app.held_thought().is_none(), "/clear holds nothing");
+    app.begin_stream();
+    app.begin_reasoning();
+    app.push_thinking("one");
+    app.finish_reasoning(1);
+    app.push_chunk("interlude");
+    app.begin_reasoning();
+    app.push_thinking("two two two");
+    app.apply_usage(&reasoning_usage(40));
+    app.finish_reasoning(1);
+    let first = thought_at(&app, 0).tokens;
+    let second = thought_at(&app, 1).tokens;
+    assert_eq!(first + second, 40, "the split is exact");
+    assert!(first < second, "weighted by each phase's own estimate");
+}
+
+#[test]
+fn a_waiting_usage_count_is_spent_once() {
+    // Spent on the thought it waited for, never carried into the next round.
+    let mut app = App::new();
+    app.begin_stream();
+    app.begin_reasoning();
+    app.push_thinking("round one thinking");
+    app.apply_usage(&reasoning_usage(30));
+    app.finish_reasoning(1);
+    app.begin_reasoning();
+    app.push_thinking("round two thinking, a little longer");
+    let estimate = app.finish_reasoning(1).expect("a thought").tokens;
+    assert_eq!(thought_at(&app, 0).tokens, 30);
+    assert_eq!(
+        thought_at(&app, 1).tokens,
+        estimate,
+        "round two's frame has not landed yet"
+    );
+}
+
+#[test]
+fn a_waiting_usage_count_goes_with_a_dropped_phase() {
+    // A fresh turn drops the phase it was waiting for, and the count with it.
+    let mut app = App::new();
+    app.begin_stream();
+    app.begin_reasoning();
+    app.push_thinking("abandoned");
+    app.apply_usage(&reasoning_usage(169));
+    app.begin_stream();
+    app.begin_reasoning();
+    app.push_thinking("a new thought");
+    let estimate = app.finish_reasoning(1).expect("a thought").tokens;
+    assert_eq!(thought_at(&app, 0).tokens, estimate);
+}
+
+#[test]
+fn a_thinking_clock_counts_until_its_phase_ends_then_holds() {
+    let t0 = Instant::now();
+    let mut clock = ThinkingClock::start(t0);
+    assert!(!clock.has_ended());
+    assert_eq!(
+        clock.elapsed(t0 + Duration::from_secs(2)),
+        Duration::from_secs(2)
+    );
+    clock.end(t0 + Duration::from_secs(3));
+    assert!(clock.has_ended());
+    assert_eq!(
+        clock.elapsed(t0 + Duration::from_secs(10)),
+        Duration::from_secs(3),
+        "the phase lasted until its end, however long its grace runs"
+    );
+}
+
+#[test]
+fn a_second_end_does_not_move_the_first() {
+    let t0 = Instant::now();
+    let mut clock = ThinkingClock::start(t0);
+    clock.end(t0 + Duration::from_secs(1));
+    clock.end(t0 + Duration::from_secs(5));
+    assert_eq!(
+        clock.elapsed(t0 + Duration::from_secs(9)),
+        Duration::from_secs(1)
+    );
+}
+
+#[test]
+fn an_ended_phase_is_due_to_settle_once_its_grace_is_over() {
+    let t0 = Instant::now();
+    let mut clock = ThinkingClock::start(t0);
+    assert!(
+        !clock.settle_due(t0 + Duration::from_secs(60)),
+        "a phase still thinking is never due"
+    );
+    let end = t0 + Duration::from_secs(1);
+    clock.end(end);
+    assert!(!clock.settle_due(end), "the grace has only begun");
+    assert!(!clock.settle_due(end + THOUGHT_SETTLE_GRACE - Duration::from_millis(1)));
+    assert!(clock.settle_due(end + THOUGHT_SETTLE_GRACE));
+    assert!(clock.settle_due(end + THOUGHT_SETTLE_GRACE * 4));
+}
+
+#[test]
+fn the_grace_outlasts_a_live_hand_off_and_stays_short() {
+    // Measured live (docs/thought-handoff.md): a call's arguments finish
+    // 17–120 ms after a short call's thought ends, and up to 642 ms after
+    // one carrying a long path or URL — the web-search skill's commands. The
+    // grace must outlast those for the call's cell to take the block's rows;
+    // a block left up much longer would be claiming a thought that is over.
+    assert!(THOUGHT_SETTLE_GRACE >= Duration::from_millis(800));
+    assert!(THOUGHT_SETTLE_GRACE <= Duration::from_millis(1500));
 }

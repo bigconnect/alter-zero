@@ -156,21 +156,20 @@ the status line and the turn summary use, so every duration and count in the
 TUI reads the same. A zero token count hides its clause; the `EXPAND_HINT` is
 the same string a capped tool peek ends with.
 
-**The block settles in place, and holds its rows until the next cell lands**
-(updated 2026-11-07). The settle commits two rows — the line and its spacer —
-where the live block stood on up to five, and the backend settles it at the
-round's *first tool-call piece*, while the call gets a cell only once its
-batch is announced. Collapsing at once sat the box up to three rows high for
-as long as the call took to generate, then dropped it back: the flicker
-reported between a thought and a `skill` call. Now the header settles into
-the `Thought for …` line **in place**, the thought's tail stays under it, and
-the line is held back from scrollback (`InlineViewport::hold`) until
-something takes the slot — the call's cell, the reply's first words, a new
-phase — when the line commits and the new content lands on the tail's rows in
-one frame (`App::hold_thought`, `ui::holds_thought`,
-`docs/thought-handoff.md`). A record after the thought, such as a task call
-with no cell, lets it go too, since its round has moved on. An Esc or an
-error still settles at once.
+**The block waits a moment for the next cell** (updated 2026-11-09). The
+settle commits two rows — the line and its spacer — where the live block
+stood on up to five, and the backend ends the phase at the round's *first
+tool-call piece*, while the call gets a cell only once its batch is announced.
+Collapsing at once sat the box up to three rows high until the cell landed a
+few frames later, then dropped it back: the flicker reported between a quick
+think and a tool call. Now the phase's `ThinkingEnd` only stops its clock
+(`ThinkingClock`): the block stays up, unchanged, through a short **settle
+grace** (`THOUGHT_SETTLE_GRACE`, a second), and the first event that draws or
+records something (`StreamEvent::settles_ended_thought` — the call's batch,
+the reply's first words, a new phase) settles it, its line committing in the
+frame the new content lands on the block's rows. Past the grace it settles
+anyway. The settled line is the same one it always was, with nothing under it
+(`docs/thought-handoff.md`). An Esc or an error still settles at once.
 
 **Ordering is invariant 4's business, not free.** The item is appended the
 moment thinking ends — which is usually before the round's reply text exists,

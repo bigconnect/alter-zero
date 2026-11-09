@@ -32,7 +32,8 @@ use ratatui::text::Line;
 
 use alter_zero::agents::{AGENT_LINGER, AgentEvent};
 use alter_zero::app::{
-    AgentNotice, AgentStop, CONNECTION_LOST_NOTICE, HistoryItem, Role, ToastKind, ToolStatus, View,
+    AgentNotice, AgentStop, CONNECTION_LOST_NOTICE, HistoryItem, Role, ThinkingClock, ToastKind,
+    ToolStatus, View,
 };
 use alter_zero::stream::{AgentChatDelivery, StreamEvent};
 use alter_zero::ui;
@@ -130,6 +131,22 @@ impl Session<'_> {
         if let Some(elapsed) = self.agent_clocks.get(id).map(Instant::elapsed) {
             self.app.freeze_agent_runtime(id, elapsed);
         }
+        // The viewed agent's ended thought waits for whatever takes its rows,
+        // the main session's rule (docs/thought-handoff.md): an event that
+        // draws or records something settles it first — among them the piece
+        // that opens a previewed `write`, which only the fold can tell.
+        if self
+            .agent_thinking_clocks
+            .get(id)
+            .is_some_and(ThinkingClock::has_ended)
+            && (event.settles_ended_thought()
+                || self
+                    .app
+                    .agent(id)
+                    .is_some_and(|run| run.will_flush_segment(&event)))
+        {
+            self.settle_agent_reasoning(id, viewing, width);
+        }
         // A thinking phase opens: start its clock, and — with the display on
         // (`/settings` **Hide thinking**, read per phase like the main
         // session's) — open the agent's reasoning buffer below, which is the
@@ -137,7 +154,7 @@ impl Session<'_> {
         let opening = matches!(event, StreamEvent::ThinkingStart) && self.show_thinking();
         if matches!(event, StreamEvent::ThinkingStart) {
             self.agent_thinking_clocks
-                .insert(id.to_string(), Instant::now());
+                .insert(id.to_string(), ThinkingClock::start(Instant::now()));
             self.app.set_agent_thinking(id, Duration::ZERO);
         }
         // The command clock — the main turn's `StatusClocks::command_start`,
@@ -163,10 +180,6 @@ impl Session<'_> {
             let shown = viewing && self.agent_render.has_committed();
             let withdrawn = self.app.withdraw_agent_attempt(id);
             if viewing {
-                // A held thought this attempt produced goes with it: the
-                // withdrawal recorded it, so the view is rebuilt below and
-                // the rebuild drops the held line. One from an earlier round
-                // stays, the main view's rule (docs/thought-handoff.md).
                 self.agent_render.reset();
             }
             Some((withdrawn, shown))
@@ -182,15 +195,29 @@ impl Session<'_> {
         // them (invariant 4). With no text buffered — the only state a real
         // backend reaches, since opening a phase flushes — both are no-ops
         // and the order does not arise.
-        if matches!(
-            event,
-            StreamEvent::ThinkingEnd | StreamEvent::StreamDone | StreamEvent::Error(_)
-        ) {
-            // Only the phase's own end holds the line on the block's rows
-            // until the agent's next cell takes them; a run that ended or
-            // failed settles at once (docs/thought-handoff.md).
-            let hold = matches!(event, StreamEvent::ThinkingEnd);
-            self.settle_agent_reasoning(id, viewing, width, hold);
+        //
+        // The phase's own end waits instead while its block is on screen:
+        // the block stays up through its settle grace for the agent's next
+        // cell to take its rows (docs/thought-handoff.md), and the pre-settle
+        // above or the roster tick settles it.
+        let waits = matches!(event, StreamEvent::ThinkingEnd)
+            && viewing
+            && self
+                .app
+                .agent(id)
+                .is_some_and(|run| run.reasoning().is_some())
+            && self
+                .agent_thinking_clocks
+                .get_mut(id)
+                .map(|clock| clock.end(Instant::now()))
+                .is_some();
+        if !waits
+            && matches!(
+                event,
+                StreamEvent::ThinkingEnd | StreamEvent::StreamDone | StreamEvent::Error(_)
+            )
+        {
+            self.settle_agent_reasoning(id, viewing, width);
         }
         // The view's segment boundaries: the agent's streamed text finalises
         // before a tool cell / the live thinking block / the end of the run,
@@ -375,7 +402,7 @@ impl Session<'_> {
     /// and the Esc interrupt.
     fn begin_local_agent_settle(&mut self, id: &str, width: u16) -> usize {
         let on_screen = self.viewing_agent(id);
-        self.settle_agent_reasoning(id, on_screen, width, false);
+        self.settle_agent_reasoning(id, on_screen, width);
         if on_screen
             && let Some(text) = self
                 .app
@@ -457,16 +484,11 @@ impl Session<'_> {
     /// **Reseat before you commit** (invariant 3): the strip loses the live
     /// block's rows as the cell lands, so the box must not rise off the
     /// bottom. See `docs/agent-view-streaming.md`.
-    ///
-    /// With `hold` (the phase's own `ThinkingEnd`) the line is held instead,
-    /// the main session's rule: the agent's strip keeps the thought on the
-    /// block's rows until its next cell takes them, so the box does not hop
-    /// up while the agent generates its call (`docs/thought-handoff.md`).
-    fn settle_agent_reasoning(&mut self, id: &str, viewing: bool, width: u16, hold: bool) {
+    fn settle_agent_reasoning(&mut self, id: &str, viewing: bool, width: u16) {
         let secs = self
             .agent_thinking_clocks
             .remove(id)
-            .map_or(0, |start| start.elapsed().as_secs());
+            .map_or(0, |clock| clock.elapsed(Instant::now()).as_secs());
         let Some(reasoning) = self.app.finish_agent_reasoning(id, secs) else {
             return;
         };
@@ -475,14 +497,9 @@ impl Session<'_> {
         }
         let height = self.live_region_height();
         self.term.set_view_height(height);
-        let mut lines = ui::reasoning_lines(&reasoning, width);
-        lines.push(Line::default());
-        if hold {
-            self.term.hold(lines);
-            self.app.hold_thought(reasoning);
-        } else {
-            self.term.insert_before(lines);
-        }
+        self.term
+            .insert_before(ui::reasoning_lines(&reasoning, width));
+        self.term.insert_before(vec![Line::default()]);
     }
 
     /// Is `id`'s session the conversation currently on the inline screen?
@@ -836,15 +853,29 @@ impl Session<'_> {
         for (id, started) in &self.agent_clocks {
             self.app.set_agent_runtime(id, started.elapsed());
         }
+        // A viewed agent's thought whose settle grace ran out with nothing
+        // taking its rows settles before this frame paints
+        // (docs/thought-handoff.md).
+        let now = Instant::now();
+        let due: Vec<String> = self
+            .agent_thinking_clocks
+            .iter()
+            .filter(|(_, clock)| clock.settle_due(now))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in due {
+            let viewing = self.viewing_agent(&id);
+            self.settle_agent_reasoning(&id, viewing, self.term.screen().width);
+        }
         // The open thinking phases' elapsed, the same injection: cleared
-        // first, so an agent whose phase ended (its clock is gone) drops the
-        // `Thinking for Ns` clause instead of freezing it
+        // first, so an agent whose phase settled (its clock is gone) drops the
+        // `Thinking for Ns` clause instead of freezing it, while one waiting
+        // out its grace reads the time it thought, not the time since
         // (`docs/agent-view-streaming.md`).
         self.app.clear_agent_thinking();
-        for (id, started) in &self.agent_thinking_clocks {
-            self.app.set_agent_thinking(id, started.elapsed());
+        for (id, clock) in &self.agent_thinking_clocks {
+            self.app.set_agent_thinking(id, clock.elapsed(now));
         }
-        let now = Instant::now();
         let settled: Vec<(String, std::time::Duration)> = self
             .app
             .agents()
