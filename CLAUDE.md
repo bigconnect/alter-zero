@@ -980,7 +980,8 @@ collapse) but expands in Ctrl+O under that same dim line, minus the hint since
 the expansion has none to make room for; `HistoryItem::Reasoning` records it, the rollout keeps it
 across a `/resume`, `context::context_messages` **skips** it (a Chat
 Completions request has nowhere to put a previous round's chain-of-thought,
-so Ctrl+D shows no trace either), the settle points are `ThinkingEnd`/Esc/a
+so Ctrl+D shows no trace either), the settle points are `ThinkingEnd` (a
+moment late while the block is on screen — the thought hand-off below)/Esc/a
 backend error via the one `tui::stream::Session::settle_reasoning`, the
 **block goes up over a finalised segment** — `ThinkingStart` flushes the run
 of assistant text before it (invariant 4's "flush before you interleave",
@@ -1043,25 +1044,30 @@ first tool-call piece while the call gets a cell only at its batch, so
 collapsing the `● Thinking…` block at once sat the box up to three rows high
 for as long as the call took to generate and dropped it back when the cell
 landed (the flicker reported between a thought and a `skill` call; present in
-v0.18.0 too). The block now **settles in place** — `App::hold_thought` keeps
-the settled `Reasoning`, `ui::reasoning::held_thought_lines` draws its
-`Thought for …` line over the same tail of thought on the block's rows — while
-the boundary holds that line back from scrollback (`InlineViewport::hold`;
-any later `insert_before` releases it first, so scrollback order matches
-history by construction); `ui::holds_thought` says when something else has
-taken the slot — a call's cell, a streaming `write`, the reply's first words,
-a new phase, a modal, the turn's end, or any record after the thought (a
-task call has no cell, so its round leaves nothing to land on the rows) — and
-`Session::sync_held_thought` releases the line in that frame, the new content
-landing on the tail's rows, while only a purge rebuild drops it unwritten
-(history carries it; a `Retrying` leaves it alone, since the withdrawal's own
-rebuild clears a thought the failed attempt produced and an earlier round's
-must still commit) and the agent session view holds its viewed agent's
-thought the same way. A preview **floor** padding every hand-off with blank
-rows was tried first and replaced: between rounds it held three empty lines
-over the status line for as long as the next request took; `smoke.sh` Phase
-153 pins no hop *and* one blank row above the status line mid-turn, through
-the dummy and through the real backend against a paced stub; the **clickable OSC 8 links** (every URL an assistant
+v0.18.0 too). The block now **lingers**: at `ThinkingEnd` the boundary keeps
+the phase open (`StatusClocks::thought_linger`, a `ThoughtLinger` per viewed
+agent) through what shows and records nothing — the call's own pieces, blank
+text, `RoundCalls` and the usage frame, the pure `app::lets_thought_linger`
+(`App::`/`AgentRun::lets_thought_linger`) — and settles it **before** folding
+anything else (`on_stream_event`/`on_agent_event` check first, so order is
+kept by construction and the new content takes the block's rows in the same
+frame), or once `app::THOUGHT_LINGER` (300 ms) has passed
+(`Session::expire_thought_lingers`, first in the draw tick, so that frame's
+status line drops `Thinking for` too). The usage frame's reasoning count waits
+for the thought (`snap_round_reasoning` defers while a phase is open,
+`finish_reasoning` applies it), so the committed line shows the provider's
+count; the line reads the phase's length at its end (`ThoughtLinger::secs`);
+only a block on screen lingers (no open read group, the conversation on
+screen); an Esc, an error or a quit settles at once. A call slower than the
+linger meets the settled line alone — never `Thought for …` over a `⎿` tail
+of the thought, which the replaced **hold** showed for as long as the call
+took (it held the settled line over the tail and the line off scrollback
+until the cell landed); a preview **floor** padding every hand-off with blank
+rows was tried before that and replaced too (three empty lines over the
+status line between rounds). `smoke.sh` Phase 153 pins no sample with the
+line over the thought, one blank row above the status line mid-turn, and no
+hop for a call written inside the linger, through the dummy and through the
+real backend against a paced stub; the **clickable OSC 8 links** (every URL an assistant
 reply shows — a bare URL in prose/lists/table cells, inline/fenced/indented
 code, a heading, or a `[text](url)` target — is painted inside an OSC 8
 hyperlink carrying the whole URL, so a wrapped URL's every fragment opens the

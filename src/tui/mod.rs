@@ -175,6 +175,10 @@ pub(crate) struct Session<'t> {
     /// wall-clock. An entry exists only while that agent is thinking
     /// (`docs/agent-view-streaming.md`).
     agent_thinking_clocks: HashMap<String, Instant>,
+    /// The agents whose phase has **ended** while their live block lingers
+    /// in their session view — `StatusClocks::thought_linger`'s per-agent
+    /// sibling, kept only for the agent on screen (`docs/thought-handoff.md`).
+    agent_thought_lingers: HashMap<String, ThoughtLinger>,
     /// When each subagent's **current running command** started — the
     /// per-agent sibling of `StatusClocks::command_start`, injected each
     /// frame as `AgentRun::command_elapsed` so its session view's `bash`
@@ -422,6 +426,10 @@ pub(crate) struct StatusClocks {
     turn_start: Option<Instant>,
     /// When the current thinking phase began (`None` outside one).
     thinking_start: Option<Instant>,
+    /// The main session's thinking phase that has **ended** while its live
+    /// `● Thinking…` block stays up a moment longer
+    /// (`docs/thought-handoff.md`). `None` outside that window.
+    thought_linger: Option<ThoughtLinger>,
     /// When the **current running command** (a model `bash` call, set at its
     /// `ToolStart`; or a `!` shell run, set in `Session::run_shell`) began —
     /// cleared when it resolves (`ToolEnd`/`ToolBackgrounded`) and at each turn
@@ -444,6 +452,7 @@ impl StatusClocks {
         Self {
             turn_start: None,
             thinking_start: None,
+            thought_linger: None,
             command_start: None,
             loop_start: Instant::now(),
         }
@@ -455,6 +464,7 @@ impl StatusClocks {
     fn start_turn(&mut self) {
         self.turn_start = Some(Instant::now());
         self.thinking_start = None;
+        self.thought_linger = None;
         self.command_start = None;
     }
 
@@ -463,5 +473,33 @@ impl StatusClocks {
     fn end_turn(&mut self) {
         self.turn_start = None;
         self.thinking_start = None;
+        self.thought_linger = None;
+    }
+}
+
+/// A thinking phase that has **ended** while its live `● Thinking…` block
+/// stays on screen a moment longer, so a call that follows the thought at
+/// once takes the block's rows directly instead of the box hopping up and
+/// back (`docs/thought-handoff.md`). It settles into its `Thought for …`
+/// line at the first event that shows or records anything else
+/// (`App::lets_thought_linger`), or at `until`, whichever comes first.
+#[derive(Clone, Copy)]
+pub(crate) struct ThoughtLinger {
+    /// How long the phase ran, in whole seconds, read when it ended — so the
+    /// wait never lengthens the line's `Thought for …`.
+    secs: u64,
+    /// When the block gives way on its own: [`THOUGHT_LINGER`] after the end.
+    ///
+    /// [`THOUGHT_LINGER`]: alter_zero::app::THOUGHT_LINGER
+    until: Instant,
+}
+
+impl ThoughtLinger {
+    /// A phase that ran `secs` and ended just now.
+    fn ended_now(secs: u64) -> Self {
+        Self {
+            secs,
+            until: Instant::now() + alter_zero::app::THOUGHT_LINGER,
+        }
     }
 }

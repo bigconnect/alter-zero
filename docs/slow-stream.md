@@ -250,8 +250,8 @@ Lifted to the whole strip — every hand-off between its cells held to it — it
 held **blank** rows wherever the next cell was a whole request away: three
 empty lines over the status line between rounds (`docs/thought-handoff.md`).
 The one hand-off that hopped with its next cell moments away by construction,
-a thought settling at its call's first piece, holds the thought itself on
-those rows instead.
+a thought settling at its call's first piece, keeps the thought's own live
+block up a moment instead, until the call's cell can take its rows.
 
 The smoke phase's own hop watch confirms a lower footer against a second
 capture a beat later, since `tmux capture-pane` can read a frame

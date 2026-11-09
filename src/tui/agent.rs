@@ -37,7 +37,7 @@ use alter_zero::app::{
 use alter_zero::stream::{AgentChatDelivery, StreamEvent};
 use alter_zero::ui;
 
-use super::Session;
+use super::{Session, ThoughtLinger};
 
 impl Session<'_> {
     /// Handle one message off the agent channel — a subagent's own event,
@@ -103,6 +103,19 @@ impl Session<'_> {
         settle: Option<(bool, u64)>,
     ) {
         let width = self.term.screen().width;
+        // A thought of this agent's lingering in its session view keeps its
+        // block up only through what shows and records nothing — anything
+        // else settles it first, the main session's rule
+        // (docs/thought-handoff.md).
+        if self.agent_thought_lingers.contains_key(id)
+            && !self
+                .app
+                .agent(id)
+                .is_some_and(|run| run.lets_thought_linger(&event))
+        {
+            let viewing = self.viewing_agent(id);
+            self.settle_agent_reasoning(id, viewing, width);
+        }
         // A subagent's permission request is the *user's* business, not the
         // roster's: raise the same shared prompt the main turn does, and stop —
         // the agent's own state is untouched while it waits
@@ -163,10 +176,6 @@ impl Session<'_> {
             let shown = viewing && self.agent_render.has_committed();
             let withdrawn = self.app.withdraw_agent_attempt(id);
             if viewing {
-                // A held thought this attempt produced goes with it: the
-                // withdrawal recorded it, so the view is rebuilt below and
-                // the rebuild drops the held line. One from an earlier round
-                // stays, the main view's rule (docs/thought-handoff.md).
                 self.agent_render.reset();
             }
             Some((withdrawn, shown))
@@ -181,16 +190,12 @@ impl Session<'_> {
         // and screen order must match history order or a rebuild reorders
         // them (invariant 4). With no text buffered — the only state a real
         // backend reaches, since opening a phase flushes — both are no-ops
-        // and the order does not arise.
-        if matches!(
-            event,
-            StreamEvent::ThinkingEnd | StreamEvent::StreamDone | StreamEvent::Error(_)
-        ) {
-            // Only the phase's own end holds the line on the block's rows
-            // until the agent's next cell takes them; a run that ended or
-            // failed settles at once (docs/thought-handoff.md).
-            let hold = matches!(event, StreamEvent::ThinkingEnd);
-            self.settle_agent_reasoning(id, viewing, width, hold);
+        // and the order does not arise. The phase's own end lingers a moment
+        // first while its block is on screen (docs/thought-handoff.md).
+        if matches!(event, StreamEvent::ThinkingEnd) {
+            self.linger_agent_reasoning(id, viewing, width);
+        } else if matches!(event, StreamEvent::StreamDone | StreamEvent::Error(_)) {
+            self.settle_agent_reasoning(id, viewing, width);
         }
         // The view's segment boundaries: the agent's streamed text finalises
         // before a tool cell / the live thinking block / the end of the run,
@@ -375,7 +380,7 @@ impl Session<'_> {
     /// and the Esc interrupt.
     fn begin_local_agent_settle(&mut self, id: &str, width: u16) -> usize {
         let on_screen = self.viewing_agent(id);
-        self.settle_agent_reasoning(id, on_screen, width, false);
+        self.settle_agent_reasoning(id, on_screen, width);
         if on_screen
             && let Some(text) = self
                 .app
@@ -443,6 +448,54 @@ impl Session<'_> {
         self.app.settings().show_thinking()
     }
 
+    /// One subagent's own `ThinkingEnd`: in its session view, keep the live
+    /// block on screen a moment longer, so the agent's next cell takes the
+    /// block's rows directly — the main session's [`Session::linger_reasoning`]
+    /// over the viewed agent (`docs/thought-handoff.md`). An agent off screen,
+    /// or a phase with nothing to show, settles at once.
+    fn linger_agent_reasoning(&mut self, id: &str, viewing: bool, width: u16) {
+        let on_screen = viewing
+            && self
+                .app
+                .agent(id)
+                .and_then(|run| run.reasoning())
+                .is_some_and(|text| !text.trim().is_empty());
+        if !on_screen {
+            self.settle_agent_reasoning(id, viewing, width);
+            return;
+        }
+        let secs = self
+            .agent_thinking_clocks
+            .get(id)
+            .map_or(0, |start| start.elapsed().as_secs());
+        self.agent_thought_lingers
+            .insert(id.to_string(), ThoughtLinger::ended_now(secs));
+        self.frame
+            .schedule_frame_in(alter_zero::app::THOUGHT_LINGER);
+    }
+
+    /// Settle each agent thought whose block has lingered past `now`'s
+    /// deadline, and keep a frame pending for the next one due — the draw
+    /// tick's agent half of `Session::expire_thought_lingers`
+    /// (`docs/thought-handoff.md`).
+    pub(crate) fn expire_agent_thought_lingers(&mut self, now: Instant) {
+        let due: Vec<String> = self
+            .agent_thought_lingers
+            .iter()
+            .filter(|(_, linger)| now >= linger.until)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let width = self.term.screen().width;
+        for id in due {
+            let viewing = self.viewing_agent(&id);
+            self.settle_agent_reasoning(&id, viewing, width);
+        }
+        if let Some(until) = self.agent_thought_lingers.values().map(|l| l.until).min() {
+            self.frame
+                .schedule_frame_in(until.saturating_duration_since(now));
+        }
+    }
+
     /// Close one subagent's thinking phase: record its `Thought for … · …
     /// tokens` cell on **that agent's** transcript and, when its session view
     /// is on screen, commit the collapsed line.
@@ -457,16 +510,14 @@ impl Session<'_> {
     /// **Reseat before you commit** (invariant 3): the strip loses the live
     /// block's rows as the cell lands, so the box must not rise off the
     /// bottom. See `docs/agent-view-streaming.md`.
-    ///
-    /// With `hold` (the phase's own `ThinkingEnd`) the line is held instead,
-    /// the main session's rule: the agent's strip keeps the thought on the
-    /// block's rows until its next cell takes them, so the box does not hop
-    /// up while the agent generates its call (`docs/thought-handoff.md`).
-    fn settle_agent_reasoning(&mut self, id: &str, viewing: bool, width: u16, hold: bool) {
-        let secs = self
-            .agent_thinking_clocks
-            .remove(id)
-            .map_or(0, |start| start.elapsed().as_secs());
+    fn settle_agent_reasoning(&mut self, id: &str, viewing: bool, width: u16) {
+        let started = self.agent_thinking_clocks.remove(id);
+        // A lingering block's phase has ended already: its line says how long
+        // it ran then (the main session's `settle_reasoning`).
+        let secs = match self.agent_thought_lingers.remove(id) {
+            Some(linger) => linger.secs,
+            None => started.map_or(0, |start| start.elapsed().as_secs()),
+        };
         let Some(reasoning) = self.app.finish_agent_reasoning(id, secs) else {
             return;
         };
@@ -475,14 +526,9 @@ impl Session<'_> {
         }
         let height = self.live_region_height();
         self.term.set_view_height(height);
-        let mut lines = ui::reasoning_lines(&reasoning, width);
-        lines.push(Line::default());
-        if hold {
-            self.term.hold(lines);
-            self.app.hold_thought(reasoning);
-        } else {
-            self.term.insert_before(lines);
-        }
+        self.term
+            .insert_before(ui::reasoning_lines(&reasoning, width));
+        self.term.insert_before(vec![Line::default()]);
     }
 
     /// Is `id`'s session the conversation currently on the inline screen?

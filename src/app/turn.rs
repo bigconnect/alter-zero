@@ -511,6 +511,7 @@ impl App {
             summary.clear();
         }
         self.reasoning = None;
+        self.reasoning_snap = None;
         self.tool_drafts.clear();
         let mut records = 0;
         if let Some(floor) = self.attempt_floor.take() {

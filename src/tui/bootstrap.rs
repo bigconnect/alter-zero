@@ -508,6 +508,7 @@ impl<'t> Session<'t> {
             bg_clocks: HashMap::new(),
             agent_clocks: HashMap::new(),
             agent_thinking_clocks: HashMap::new(),
+            agent_thought_lingers: HashMap::new(),
             agent_command_clocks: HashMap::new(),
             agent_expiry: HashMap::new(),
             // Invariant 1: the `EventStream` is created HERE — after
@@ -956,6 +957,11 @@ impl<'t> Session<'t> {
     /// when the run recorded a conversation — the exit hint `main` prints after
     /// the terminal is restored (`docs/cli.md`).
     pub(crate) fn shutdown(mut self) -> Option<String> {
+        // A thought still lingering on screen had ended: it is settled
+        // content, so it commits and records like any (docs/thought-handoff.md).
+        if self.clocks.thought_linger.is_some() {
+            self.settle_reasoning();
+        }
         // The quit arms break before the loop-bottom sync — catch the last
         // change.
         self.recorder

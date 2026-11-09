@@ -236,9 +236,6 @@ impl Session<'_> {
     /// chat above it scrolling into real scrollback (`InlineViewport` notes that
     /// one-way move for the close's purge rebuild; `docs/permissions.md`).
     pub(crate) fn draw_conversation(&mut self) -> io::Result<()> {
-        // A held thought gives its rows up the frame something takes them,
-        // its line committing in that same frame (docs/thought-handoff.md).
-        self.sync_held_thought();
         // Compute the strip preview cheaply once per frame (O(one line); a
         // forming table re-renders just its own block), so the status animation
         // never re-renders the whole reply — and inject its row count so the
@@ -367,28 +364,8 @@ impl Session<'_> {
             .draw_overlay(|area, buf| ui::render_context_view(area, buf, app, &body))
     }
 
-    /// Let a held thought go once it no longer holds (`docs/thought-handoff.md`):
-    /// something took the strip's slot — a call's cell, the reply's first
-    /// words, a new phase, a modal — the turn ended, or a commit already
-    /// released the held line ahead of itself. Its line is queued now, so the
-    /// frame that draws what replaced the thought writes the line with it:
-    /// the line and its spacer above, the new content on the rows the
-    /// thought's tail had, and the box exactly where it was.
-    pub(crate) fn sync_held_thought(&mut self) {
-        let holding = self.term.has_held() && ui::holds_thought(&self.app);
-        if !holding {
-            self.term.release_held();
-            self.app.drop_held_thought();
-        }
-    }
-
     /// Paint whichever view is current — the draw tick's whole body.
     pub(crate) fn draw_active_view(&mut self) -> io::Result<()> {
-        // Before the flow and modal checks below, which size the strip
-        // (docs/thought-handoff.md).
-        if self.app.view == View::Conversation {
-            self.sync_held_thought();
-        }
         match self.app.view {
             // The modal (permission-prompt) region needs a purge rebuild
             // instead of an in-place paint — two cases, one pure decision
@@ -502,10 +479,6 @@ impl Session<'_> {
         // so nothing is "already committed" any more: reset, and let the
         // catch-up below re-commit the whole partial at the current width.
         self.render.reset();
-        // A held thought is in history, so the rebuilt tail carries its line;
-        // the strip must not show it a second time (docs/thought-handoff.md).
-        self.term.drop_held();
-        self.app.drop_held_thought();
         // The preview comes FIRST: it injects the strip's preview row count
         // (`set_stream_preview_rows` — a forming table previews multi-row) that
         // `live_region_height` below must reserve (docs/table-streaming.md).
@@ -571,10 +544,6 @@ impl Session<'_> {
     pub(crate) fn repaint_agent_view(&mut self) -> io::Result<()> {
         let screen = self.term.screen();
         self.agent_render.reset();
-        // Whichever conversation held a thought, this rebuild re-seats the
-        // screen from history (docs/thought-handoff.md).
-        self.term.drop_held();
-        self.app.drop_held_thought();
         let Some(run) = self.app.viewed_agent() else {
             return Ok(());
         };
@@ -802,6 +771,10 @@ impl Session<'_> {
     /// a thinking pause). The chain seeds from the Submit keypress and stops by
     /// itself on the first draw after the turn ends.
     pub(crate) fn on_draw_tick(&mut self) -> io::Result<()> {
+        // First: a thought whose block has lingered its while settles in this
+        // very frame, before the times below put a `Thinking for` clause on
+        // the status line it no longer has (docs/thought-handoff.md).
+        self.expire_thought_lingers();
         self.update_status_times();
         // Inject each background shell's runtime (the boundary owns the started
         // clocks — docs/background.md), so the manager's details view ticks.
@@ -839,6 +812,25 @@ impl Session<'_> {
             self.frame.schedule_frame_in(DEVICE_TICK_INTERVAL);
         }
         Ok(())
+    }
+
+    /// Settle a thought whose live block has lingered [`THOUGHT_LINGER`]
+    /// with nothing arriving to take its rows (`docs/thought-handoff.md`):
+    /// the main session's, and the viewed agent's. While one still lingers,
+    /// keep a frame pending for the moment it is due — a coalesced frame can
+    /// consume the one its `ThinkingEnd` scheduled (the toast's rule).
+    ///
+    /// [`THOUGHT_LINGER`]: alter_zero::app::THOUGHT_LINGER
+    fn expire_thought_lingers(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(linger) = self.clocks.thought_linger {
+            if now >= linger.until {
+                self.settle_reasoning();
+            } else {
+                self.frame.schedule_frame_in(linger.until - now);
+            }
+        }
+        self.expire_agent_thought_lingers(now);
     }
 
     /// Expire the transient toast when its deadline passes (so this very frame

@@ -210,16 +210,17 @@ release heading when a version is cut.
   model you picked before this fix keeps what was saved for it until you
   pick it again in `/model` (`docs/user-providers.md`).
 
-- **The input box no longer jumps when a thought hands over to a tool
-  call.** When the model thought and then called a tool — a `skill` load
-  right after a short think, say — the `● Thinking…` block collapsed before
-  the call's cell was on screen, and for as long as the call took to
-  generate the box and footer jumped up as much as three rows and then
-  dropped back: a flicker that came and went with how fast the call
-  arrived. The block now settles in place — its header becomes the
-  `Thought for …` line with the thought still under it — and the call's
-  cell takes those rows when it lands, in the main conversation and in a
-  subagent's session view alike (`docs/thought-handoff.md`).
+- **The input box no longer jumps when a quick thought hands over to a
+  tool call.** When the model thought and then called a tool right away — a
+  `skill` load or an `ls` after a short think, say — the `● Thinking…` block
+  collapsed before the call's cell was on screen, and the box and footer
+  jumped up as much as three rows and dropped back a moment later: a
+  flicker that came and went with how fast the call arrived. The block now
+  stays up a moment after the thought ends, 300 ms at most, and hands its
+  rows straight to the call's cell, in the main conversation and in a
+  subagent's session view alike. A settled thought is its one
+  `Thought for …` line, with nothing of the thought left under it
+  (`docs/thought-handoff.md`).
 
 - **A broken hook is named by the first line of its command.** When a hook
   written as a multi-line inline script failed, timed out or printed

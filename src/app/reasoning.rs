@@ -68,6 +68,48 @@ fn distribute(total: usize, weights: &[usize]) -> Vec<usize> {
     parts
 }
 
+/// How long a thought's live `● Thinking…` block stays on screen after its
+/// phase ends, waiting for the round's next cell (`docs/thought-handoff.md`).
+///
+/// The backend ends a phase at the round's first tool-call piece, but the
+/// call has a cell only once its batch is announced. Collapsing the block at
+/// once lifted the box by the block's rows until the cell landed and then
+/// dropped it back — a flicker with a fast model, whose call follows its
+/// thought within a fraction of a second. The block now lingers through
+/// what shows nothing ([`App::lets_thought_linger`]), for at most this long: a
+/// call that lands within it takes the block's rows directly, while a slow
+/// one meets the settled `Thought for …` line, never a block still claiming
+/// the model thinks.
+pub const THOUGHT_LINGER: Duration = Duration::from_millis(300);
+
+/// Whether `event` lets a thought whose phase has just ended keep its live
+/// block on screen ([`THOUGHT_LINGER`], `docs/thought-handoff.md`): it shows
+/// nothing in the strip's slot and records nothing — a piece of a call that
+/// previews no cell, blank text while the reply (`reply`) is still blank,
+/// the round's wire ids and its usage frame (whose reasoning count waits for
+/// the thought, [`App::apply_usage`]). Anything else settles the thought
+/// **before** it is folded in, so the thought's line lands ahead of it in
+/// history and scrollback alike, and the new content takes the block's rows
+/// in the same frame.
+///
+/// The one rule for the main session ([`App::lets_thought_linger`]) and an
+/// agent's session view (`AgentRun::lets_thought_linger`), over each one's
+/// own reply and `drafts`.
+pub(crate) fn lets_thought_linger(
+    event: &StreamEvent,
+    reply: Option<&str>,
+    drafts: &ToolDrafts,
+) -> bool {
+    match event {
+        StreamEvent::Chunk(text) => {
+            text.trim().is_empty() && reply.is_none_or(|reply| reply.trim().is_empty())
+        }
+        StreamEvent::ToolCallDelta(piece) => !drafts.opens_preview(piece),
+        StreamEvent::RoundCalls(_) | StreamEvent::Usage(_) => true,
+        _ => false,
+    }
+}
+
 impl App {
     /// Open a thinking phase ([`crate::stream::StreamEvent::ThinkingStart`]),
     /// so the strip previews the reasoning as it streams and the phase settles
@@ -103,20 +145,29 @@ impl App {
     /// single delta, and a `Thought for 0s` cell for that is noise.
     pub fn finish_reasoning(&mut self, secs: u64) -> Option<Reasoning> {
         let text = self.reasoning.take()?;
-        if text.trim().is_empty() {
-            return None;
+        let recorded = (!text.trim().is_empty()).then(|| {
+            // Remember where it landed so this round's usage frame can snap
+            // its estimate to the provider's own count.
+            let index = self.history.len();
+            self.round_reasoning.push(index);
+            self.history.push(HistoryItem::Reasoning(Reasoning {
+                tokens: count_tokens(&text),
+                text,
+                secs,
+                timestamp: self.now_stamp(),
+            }));
+            index
+        });
+        // The round's usage frame landed while the thought lingered on
+        // screen: it snaps the round now, this thought included, so the line
+        // the boundary commits shows the provider's count.
+        if let Some(reasoning_tokens) = self.reasoning_snap.take() {
+            self.snap_round_reasoning(reasoning_tokens);
         }
-        let reasoning = Reasoning {
-            tokens: count_tokens(&text),
-            text,
-            secs,
-            timestamp: self.now_stamp(),
-        };
-        // Remember where it landed so this round's usage frame can snap its
-        // estimate to the provider's own count.
-        self.round_reasoning.push(self.history.len());
-        self.history.push(HistoryItem::Reasoning(reasoning.clone()));
-        Some(reasoning)
+        match self.history.get(recorded?) {
+            Some(HistoryItem::Reasoning(reasoning)) => Some(reasoning.clone()),
+            _ => None,
+        }
     }
 
     /// Drop an open thinking phase without recording it — the `/clear` wipe
@@ -124,40 +175,17 @@ impl App {
     pub(super) fn drop_reasoning(&mut self) {
         self.reasoning = None;
         self.round_reasoning.clear();
-        // A thought held for the last turn's next cell has nothing left to
-        // hand over to (docs/thought-handoff.md).
-        self.held_thought = None;
+        self.reasoning_snap = None;
     }
 
-    /// Hold a just-settled thought **on screen** until the next cell takes
-    /// its rows (`docs/thought-handoff.md`): the strip draws it as its
-    /// settled `Thought for …` line over the thought's tail — the rows the
-    /// live block stood on — while the boundary holds that line back from
-    /// scrollback. The thought is recorded already ([`finish_reasoning`]);
-    /// this is display only.
-    ///
-    /// The backend settles a phase at the round's first tool-call piece, but
-    /// the call has a cell only once its batch is announced: collapsing the
-    /// block at once lifted the box by its rows for as long as the call took
-    /// to generate, and dropped it back when the cell landed — the flicker
-    /// reported between a quick think and a `skill` call.
-    ///
-    /// [`finish_reasoning`]: App::finish_reasoning
-    pub fn hold_thought(&mut self, thought: Reasoning) {
-        self.held_thought = Some(thought);
-    }
-
-    /// The thought held on screen ([`hold_thought`](App::hold_thought)), if
-    /// any — what the strip draws while nothing else has taken its rows.
+    /// Whether `event` lets the thought whose phase just ended keep its live
+    /// block on screen a moment longer (`docs/thought-handoff.md`) — the
+    /// boundary settles it first otherwise. Read over the main session's
+    /// reply and drafts; an agent's session view reads the same rule over its
+    /// own (`AgentRun::lets_thought_linger`).
     #[must_use]
-    pub const fn held_thought(&self) -> Option<&Reasoning> {
-        self.held_thought.as_ref()
-    }
-
-    /// Let the held thought go — its line has committed, or the screen was
-    /// rebuilt from history, which carries it.
-    pub fn drop_held_thought(&mut self) {
-        self.held_thought = None;
+    pub fn lets_thought_linger(&self, event: &StreamEvent) -> bool {
+        lets_thought_linger(event, self.streaming_text(), &self.tool_drafts)
     }
 
     /// Replace this round's reasoning cells' token estimates with the
@@ -168,7 +196,17 @@ impl App {
     ///
     /// Defensive about its indices: a history mutation between the recording
     /// and the frame (a `/clear`, a backtrack) simply leaves nothing to snap.
+    ///
+    /// A thought still **open** when the frame lands — its phase over, its
+    /// block lingering on screen ([`THOUGHT_LINGER`]) — is no snap target
+    /// yet: the count waits, and [`finish_reasoning`](App::finish_reasoning)
+    /// snaps the round once that thought is recorded
+    /// (`docs/thought-handoff.md`).
     pub(super) fn snap_round_reasoning(&mut self, reasoning_tokens: u64) {
+        if self.reasoning.is_some() {
+            self.reasoning_snap = Some(reasoning_tokens);
+            return;
+        }
         let targets = std::mem::take(&mut self.round_reasoning);
         snap_reasoning_tokens(&mut self.history, &targets, reasoning_tokens);
     }

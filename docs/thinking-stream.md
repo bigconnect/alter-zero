@@ -156,21 +156,22 @@ the status line and the turn summary use, so every duration and count in the
 TUI reads the same. A zero token count hides its clause; the `EXPAND_HINT` is
 the same string a capped tool peek ends with.
 
-**The block settles in place, and holds its rows until the next cell lands**
-(updated 2026-11-07). The settle commits two rows — the line and its spacer —
-where the live block stood on up to five, and the backend settles it at the
-round's *first tool-call piece*, while the call gets a cell only once its
-batch is announced. Collapsing at once sat the box up to three rows high for
-as long as the call took to generate, then dropped it back: the flicker
-reported between a thought and a `skill` call. Now the header settles into
-the `Thought for …` line **in place**, the thought's tail stays under it, and
-the line is held back from scrollback (`InlineViewport::hold`) until
-something takes the slot — the call's cell, the reply's first words, a new
-phase — when the line commits and the new content lands on the tail's rows in
-one frame (`App::hold_thought`, `ui::holds_thought`,
-`docs/thought-handoff.md`). A record after the thought, such as a task call
-with no cell, lets it go too, since its round has moved on. An Esc or an
-error still settles at once.
+**The block lingers a moment before it settles** (updated 2026-11-09). The
+settle commits two rows — the line and its spacer — where the live block
+stood on up to five, and the backend ends the phase at the round's *first
+tool-call piece*, while the call gets a cell only once its batch is
+announced. Collapsing at once sat the box up to three rows high for as long
+as the call took to generate, then dropped it back: the flicker reported
+between a quick thought and a `skill` call. Now the block stays up, unchanged,
+through what shows nothing — the call's own pieces, the round's ids and its
+usage frame (`App::lets_thought_linger`) — for at most `THOUGHT_LINGER`
+(300 ms), and settles the moment anything else arrives, *before* that is
+folded in: a call announced inside the window takes the block's rows in the
+frame the line commits, and a slower one meets the settled line alone. The
+line always stands alone — the thought itself is never shown under it. The
+round's usage frame lingers too, its reasoning count waiting for the thought
+to be recorded, so the line shows the provider's count. An Esc, an error or a
+quit settles at once (`docs/thought-handoff.md`).
 
 **Ordering is invariant 4's business, not free.** The item is appended the
 moment thinking ends — which is usually before the round's reply text exists,

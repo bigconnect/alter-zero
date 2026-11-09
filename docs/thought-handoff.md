@@ -1,4 +1,4 @@
-# The thought hand-off — a settled thought holds its rows until the next cell lands
+# The thought hand-off — a thought's block lingers a moment for the next cell
 
 ## The report
 
@@ -59,115 +59,130 @@ own thoughts the same way and hopped the same way.
 **Not a regression.** v0.18.0, built from its tag and driven through the same
 offline turn at the same size, hops at the same frames by the same rows.
 
-## The first fix, and why it was replaced
+## Two fixes that were replaced
 
-The first fix kept a **preview floor**: each frame, the strip reserved what
-its slot had a frame ago less every row committed since, padding with blank
-rows — `StreamRender`'s own rule inside a reply (`docs/slow-stream.md`),
-lifted to every hand-off between the strip's cells. The hop was gone, but the
-padding was **blank rows**, and they showed wherever the next content was more
-than a moment away:
+**A preview floor.** Each frame, the strip reserved what its slot had a frame
+ago less every row committed since, padding with blank rows —
+`StreamRender`'s own rule inside a reply (`docs/slow-stream.md`), lifted to
+every hand-off between the strip's cells. The hop was gone, but the padding
+was **blank rows**, and they showed wherever the next content was more than a
+moment away:
 
 > it occupies 3 empty newlines — it should be 1 new line between
 > `… +234 lines` and the status line indicator
 
 That was a `bash` cell between rounds: its live tail (four output rows and its
 `+N lines` footer) stood taller than its settled peek, so the floor held the
-difference blank until the *next request* answered — seconds, not frames. The
-same padding would have sat under a call that ran long after a read group
-closed, and under a slow reply's first row. Measured on the same prompt: every
-pre-floor frame had exactly one blank row above the status line; the floor's
-runs had frames with two and four.
+difference blank until the *next request* answered — seconds, not frames.
+Measured on the same prompt: every pre-floor frame had exactly one blank row
+above the status line; the floor's runs had frames with two and four.
 
-Blank rows held for a cell that is a whole request away are a layout bug of
-their own. So the floor is gone, and the one hand-off that hopped *and* had
-its next content seconds-or-less away, by construction — a thought settling at
-its call's first piece — holds **content** instead.
+**Holding the settled line over the thought.** The second fix recorded the
+thought at `ThinkingEnd` but kept its line off scrollback (a held queue on
+`InlineViewport`), and drew the block with its header settled in place — the
+`Thought for …` line over the same tail of thought — until the round's next
+cell took those rows. No hop, no blank rows; but the settled line stood over a
+`⎿` tail of the thought for as long as the call took to generate, which is
+seconds for a long command or an agent's prompt:
 
-## The design
+> Thought for 0s · 48 tokens (ctrl+o to expand)
+>   ⎿ …
+>
+> after thinking done it should show like this, no `⎿ …`, like before
 
-**The thought settles in place.** At `ThinkingEnd` the phase is recorded as
-before (`App::finish_reasoning` — history order and the usage snap are
-unchanged), but its line is not written to scrollback yet:
+It also cost a held-line queue in the viewport, a release that every commit
+ran first, a pure rule for when the hold ends, a per-frame sync and a drop in
+every rebuild — some 1,200 lines with its tests and docs, for a gap that is
+a tenth of a second with the models that cause it.
 
-- `App::hold_thought` keeps the settled `Reasoning` for the strip, and
-  `ui::reasoning::held_thought_lines` draws it as the block it settled from
-  with its header settled in place — the very `Thought for …` line
-  `reasoning_lines` commits — over the same tail of thought. Same rows, so the
-  box does not move when the phase ends.
-- The boundary queues the line and its spacer on `InlineViewport::hold`
-  instead of `insert_before`: committed, but held back from the next flush.
+## The design: the block lingers a moment
 
-**The next cell takes the rows.** `ui::holds_thought` is the pure decision:
-something is held, the conversation on screen is mid-turn, no modal prompt
-replaces the region, the thought is still the newest record of that
-conversation's history, and nothing else has taken the preview slot — no call
-queued or streaming into a cell of its own, no agent group, no open
-read/search group, no new thinking phase, no reply text beyond whitespace.
-`preview_rows`/`preview_lines` draw the held thought first while it holds.
+The phase ends where it always did, but its **live block stays up a moment
+longer** instead of collapsing at once — `● Thinking…`, its tail of thought,
+the status line's `Thinking for Ns`, all unchanged. Nothing new is drawn and
+nothing is held off scrollback: the thought is simply settled a little later.
 
-The newest-record rule ties the hold to the thought's own round. A round
-whose only call is a task call records it with no cell (`docs/task-tools.md`):
-the round has moved past the thought and nothing will land on its rows, so the
-line commits at once rather than staying held through the next request.
-The first frame it stops holding, `Session::sync_held_thought` (run at the top
-of the draw tick and of `draw_conversation`) releases the held line into the
-queue and drops the thought, so that frame writes the line and its spacer
-above and draws the new content on the rows the thought's tail had:
-
-```
-Thought for 0s · 50 tokens (ctrl+o to expand)     ← the settle: same row as the header
-  ⎿  The user wants to know …                      ← the tail stays
-     first.
-     Note: … Let's actually search.
-
-⣀⣀⣀⣀⣀⣛⣀⣀ Working… (0s · ↓ 77 tokens · esc to interrupt)
-```
+- **When it settles.** At the first event that shows or records anything
+  else, before that event is folded in (`Session::on_stream_event` and
+  `on_agent_event` check it first) — or once `app::THOUGHT_LINGER` (300 ms)
+  has passed since the phase ended, whichever comes first. The draw tick
+  settles an expired one before it injects the status times
+  (`Session::expire_thought_lingers`), so that frame's status line has no
+  `Thinking for` clause either.
+- **What lets it linger** is the one pure rule `app::lets_thought_linger`
+  (`App::lets_thought_linger`, `AgentRun::lets_thought_linger`): a piece of a
+  call that previews no cell, blank text while the reply is still blank, the
+  round's wire ids (`RoundCalls`) and its usage frame. Everything else — a
+  batch, a call's start, a task call, an agent group, the reply's first
+  words, a `write` streaming into its own cell, a new phase, a hook's note, a
+  steered message, a modal, a retry, the turn's end — settles it first.
+- **Order is kept by construction.** The settle runs *before* the event that
+  ends the linger is folded, so the thought's line lands ahead of it in
+  history and scrollback alike, and the new content takes the block's rows
+  in the same frame. A batch announced inside the window therefore goes from
+  the block straight to the line plus the cell:
 
 ```
-Thought for 0s · 50 tokens (ctrl+o to expand)     ← now in scrollback, same row
-                                                   ← its spacer, where the tail began
-● Skill(web-search)                                ← the cell, on the tail's rows
-  ⎿  Running…
+● Thinking…                                        ← the block, lingering
+  ⎿  The user wants me to list files …
+     Let me use the bash tool with `ls -la`.
 
-⣀⣀⣀⣀⣀⣘⣃⣀ Working… (0s · ↑ 6.4k tokens · esc to interrupt)
+⣀⣀⣀⣀⣘⣃⣀⣀ Working… (0s · ↓ 89 tokens · Thinking for 0s · esc to interrupt)
 ```
 
-**Order is kept by construction.** `InlineViewport::insert_before` releases
-the held lines ahead of whatever it queues, so a cell that commits before the
-next frame (a `skill` call resolves within one) lands *under* the thought's
-line in scrollback, as it does in history — no commit site needs to know a
-line is held. An empty batch releases nothing.
+```
+Thought for 0s · 42 tokens (ctrl+o to expand)      ← committed, on the header's row
+                                                   ← its spacer
+● Bash(ls -la)                                     ← the cell, on the block's rows
+  ⎿  Running… (0s · wait 2m)
 
-**What drops a held thought unwritten.** Only a purge rebuild (`reflow`, and
-`repaint_conversation`/`repaint_agent_view`, which drop it before they paint),
-which regenerates the line from history. A quit flushes it (`restore`), since
-it is committed content.
+⣀⣀⣀⣀⣘⣃⣀⣀ Working… (0s · ↓ 4.3k tokens · esc to interrupt)
+```
 
-A `Retrying` does not touch it. A thought the failed attempt produced is
-withdrawn from history with the attempt, and a withdrawal that took a record
-rebuilds the screen (`retract_withdrawn_rows`, or the agent view's own
-rebuild), which drops the held line: it never reaches scrollback. A thought
-held from an earlier round belongs to that round and commits when it is let
-go. The retry used to drop every held line itself, and that lost two lines:
-a thought followed only by a task call, then a retried request — the thought
-was still held, so its `Thought for …` line never reached scrollback (Ctrl+O
-still showed it); and, in an agent session view, the viewed agent's held line
-when the main conversation's request was retried.
+- **The usage frame waits for the thought.** The round's usage frame arrives
+  before its batch, and a frame snaps the round's thoughts to the provider's
+  `reasoning_tokens` (`docs/thinking-stream.md`). Ending the linger there
+  would have let a draw slip in between the frame and the batch — the hole
+  again, a frame long. So the frame lingers too, and its reasoning count
+  waits for the thought (`App::snap_round_reasoning`,
+  `AgentRun::snap_round_reasoning`): once the thought is recorded,
+  `finish_reasoning` snaps the round with it, and the line that commits shows
+  the provider's own count. A phase dropped unsettled (a new turn, `/clear`,
+  a retry) drops the waiting count with it.
+- **The length is the phase's.** `Thought for …` reads the phase's length when
+  it ended (`ThoughtLinger::secs`), never how long the block stayed up.
+- **Only a block on screen lingers.** An empty phase records nothing; an open
+  read/search group shows no block (`docs/tool-groups.md` *Thoughts*); an
+  agent session view or a flowed page keeps the main conversation off the
+  screen — those settle at once. An agent's thought lingers only while its
+  session view is the one on screen (`Session::linger_agent_reasoning`, one
+  `ThoughtLinger` per agent).
+- **An Esc or an error** settles a lingering thought at once, as it settles
+  any open phase. **A quit** settles a lingering one too
+  (`Session::shutdown`) — its phase had ended — so it still reaches
+  scrollback and the rollout; a quit mid-thought drops the thought, as it
+  always did.
 
-**Where it holds.** Only at the phase's own end: an Esc or a backend error
-settles at once, since the turn is ending and its own commits follow. The
-agent session view holds the viewed agent's thought the same way
-(`settle_agent_reasoning`'s `hold`), its slot read off the viewed run.
+**Why 300 ms.** The reported gap — the thought ending at the call's first
+piece, the batch announced once its last piece is in — measured about 80 ms on
+ClinePass and about 110 ms on OpenRouter's `recursive/flint-v1.0:free`, the
+fast models that show the flicker. A call that takes longer than the linger
+to generate meets the settled line alone, and its cell lands under it when it
+is ready: the box rises once and falls once, the call's whole generation
+apart — a step, not a flicker, and never a block still saying the model
+thinks while it writes a long command.
 
 ## What it does not change
 
 - **Between rounds** the strip is the status line under the cell's one
-  spacer — nothing is held there, because no thought is settling.
+  spacer — nothing lingers there, because no thought is settling.
 - **A thought giving way to the reply** still lifts the box a row: the
   frontier's one row is shorter than the thought's tail, and the only ways to
   hide that are blank padding under the reply (the rejected floor) or holding
   the reply back. v0.18.0 does the same.
+- **A call slower than the linger** — the dummy's offline demo, whose calls
+  stream at a readable pace, is one — still rises when the linger runs out
+  and falls when its cell lands, as every hand-off did before.
 - **A read group closing under the next call** still lifts the box a row for
   that call's runtime — its two-row live cell settles into one line, a row
   short — for the same reason. v0.18.0 does the same.
@@ -176,31 +191,35 @@ agent session view holds the viewed agent's thought the same way
 
 ## Testing
 
-- `ui::tests::held_thought`: the held view stands on the block's rows with its
-  header settled into the committed line; the box does not move from the
-  thought to the call (and while the call is still generating); the hold
-  gives way to a streaming `write`, the reply's first words (not whitespace),
-  a new phase, a modal and the turn's end; a record after the thought (a task
-  call, an agent's hook note) ends the hold; nothing holds a row between
-  rounds; a subagent's thought is held in its own strip.
-  `app::tests::reasoning`: the hold's lifecycle, dropped by a new turn and by
-  `/clear`. Every guard in `holds_thought` and the phase reset is
-  mutation-checked — each fails its test when removed.
-- `scripts/smoke.sh` **Phase 153** samples four turns ~20 times a second with
-  Phase 121's double-capture rule: no hop while the hand-off is under way, the
-  settled line seen with the thought under it, and never more than one blank
-  row above the status line. The default offline turn runs on a terminal with
-  room below the box (no purge rebuild; the thought's line and each cell
-  exactly once, the thought's own text never in scrollback) and on an 80×16
-  one, where the box sits on the bottom row. Two more go through the real
-  backend against a paced stub provider (ported from
-  fix/box-flicker-after-thinking): a `bash` call written over about a second,
-  then a three-second round boundary; and a thought followed only by a
-  `taskcreate`, then a request that fails with a 500 once, after which the
-  thought's line must be in scrollback exactly once. The pre-fix binary fails
-  the first three turns (the hop, no held view), the floor's binary the blank
-  rows, and e97ef69's (this design before the newest-record rule and the retry
-  fix) the fourth.
-- Real provider: the reported prompt on ClinePass at 100×30, 80×24 and 80×14
-  — no hop at the thought → `skill` hand-off, and exactly one blank row above
-  the status line in every mid-turn frame.
+- `app::tests::reasoning`: what lets a thought linger and what ends it, a
+  usage frame waiting for the thought still on screen (and its count on the
+  line that commits), the round's split over an earlier thought, and a
+  dropped phase dropping its waiting count. `agents::tests` pins the same
+  rule and snap over an agent's run. Each was checked against a mutated
+  implementation: a snap that never waits, a phase that keeps its count, a
+  usage frame or a `write`'s piece that ends the linger the wrong way.
+- `ui::tests::thought_linger`: the box does not move from the lingering block
+  to the line and the call's cell — the main session and an agent's session
+  view alike; a settled thought leaves only its line, nothing of its text in
+  the strip; nothing holds a row between rounds.
+- `scripts/smoke.sh` **Phase 153** samples five turns ~20 times a second with
+  Phase 121's double-capture rule: no sample ever shows the settled line with
+  the thought still on screen, and never more than one blank row above the
+  status line. The default offline turn runs on a terminal with room below
+  the box (no purge rebuild; the thought's line and each cell exactly once)
+  and on an 80×16 one, where the box sits on the bottom row. Three go through
+  the real backend against a paced stub provider: a `bash` call written in
+  about 0.2 s, inside the linger — no hop, and no sample with the line but
+  not the cell; a call written over about a second — the line alone before
+  the cell, then a three-second round boundary; and a thought followed only
+  by a `taskcreate`, then a request that fails with a 500 once, after which
+  the thought's line must be in scrollback exactly once. The held-line
+  binary fails all four sampled turns (the line over the thought), and a
+  build with the linger at 0 ms — the original collapse-at-once — fails the
+  quick call (a hop, and the line before the cell). Phase 66 checks the
+  thought's text is off the screen from the frame its line appears in.
+- Real provider: OpenRouter's `recursive/flint-v1.0:free` at `medium`,
+  recorded with `tmux pipe-pane` and replayed one synchronized frame at a
+  time — the block hands over to `● Bash(ls -la)` in a single frame, the
+  footer on the same row, and no frame shows the settled line over the
+  thought.

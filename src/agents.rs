@@ -357,6 +357,11 @@ pub struct AgentRun {
     /// `reasoning_tokens` (`app::reasoning::snap_reasoning_tokens`). Cleared by
     /// each frame — one frame ends one round.
     round_reasoning: Vec<usize>,
+    /// The round's `reasoning_tokens`, waiting for a thought still open when
+    /// the frame landed — its block lingering in the session view after the
+    /// phase ended — which [`finish_reasoning`](Self::finish_reasoning) snaps
+    /// with the round once it is recorded (`docs/thought-handoff.md`).
+    reasoning_snap: Option<u64>,
     /// Where the reply attempt now streaming began on
     /// [`history`](Self::history) — the mark a [`StreamEvent::Retrying`]
     /// withdraws back to, taken at the attempt's first piece of output since
@@ -464,6 +469,7 @@ impl AgentRun {
             paragraph: ParagraphStart::default(),
             reasoning: None,
             round_reasoning: Vec::new(),
+            reasoning_snap: None,
             attempt_floor: None,
             thinking: None,
             command_elapsed: None,
@@ -828,9 +834,10 @@ impl AgentRun {
                 // `Thought for …` cells trade their token estimate for
                 // the provider's own `reasoning_tokens`, the main session's
                 // snap over this agent's transcript
-                // (`docs/thinking-stream.md`).
-                let targets = std::mem::take(&mut self.round_reasoning);
-                crate::app::snap_reasoning_tokens(&mut self.history, &targets, usage.reasoning);
+                // (`docs/thinking-stream.md`) — waiting for a thought still
+                // open on screen, the main session's rule
+                // (`docs/thought-handoff.md`).
+                self.snap_round_reasoning(usage.reasoning);
                 self.usage_tokens += usage.total();
                 self.tokens = self.usage_tokens;
                 // Its session view's `/context` page (docs/context-usage.md).
@@ -1178,6 +1185,7 @@ impl AgentRun {
         self.streaming = None;
         self.paragraph = ParagraphStart::default();
         self.reasoning = None;
+        self.reasoning_snap = None;
         self.thinking = None;
         self.drafts.clear();
         let mut records = 0;
@@ -1236,6 +1244,7 @@ impl AgentRun {
         self.turn_usage_cached = 0;
         self.turn_usage_cache_write = 0;
         self.round_reasoning.clear();
+        self.reasoning_snap = None;
         self.user_messages.clear();
         self.drafts.clear();
     }
@@ -1374,20 +1383,53 @@ impl AgentRun {
     pub fn finish_reasoning(&mut self, secs: u64) -> Option<crate::app::Reasoning> {
         self.thinking = None;
         let text = self.reasoning.take()?;
-        if text.trim().is_empty() {
-            return None;
+        let recorded = (!text.trim().is_empty()).then(|| {
+            // Remember where it landed so this round's usage frame can snap
+            // its estimate to the provider's own count.
+            let index = self.history.len();
+            self.round_reasoning.push(index);
+            self.history
+                .push(HistoryItem::Reasoning(crate::app::Reasoning {
+                    tokens: crate::app::count_tokens(&text),
+                    text,
+                    secs,
+                    timestamp: String::new(),
+                }));
+            index
+        });
+        // A usage frame that landed while the thought lingered on screen
+        // snaps the round now, this thought included (the main session's
+        // `App::finish_reasoning`).
+        if let Some(reasoning_tokens) = self.reasoning_snap.take() {
+            self.snap_round_reasoning(reasoning_tokens);
         }
-        let reasoning = crate::app::Reasoning {
-            tokens: crate::app::count_tokens(&text),
-            text,
-            secs,
-            timestamp: String::new(),
-        };
-        // Remember where it landed so this round's usage frame can snap its
-        // estimate to the provider's own count.
-        self.round_reasoning.push(self.history.len());
-        self.history.push(HistoryItem::Reasoning(reasoning.clone()));
-        Some(reasoning)
+        match self.history.get(recorded?) {
+            Some(HistoryItem::Reasoning(reasoning)) => Some(reasoning.clone()),
+            _ => None,
+        }
+    }
+
+    /// Snap this round's thinking cells to the provider's `reasoning_tokens`
+    /// (`crate::app::snap_reasoning_tokens`) — or, with a phase still open
+    /// (its block lingering in the session view after the phase ended), wait
+    /// for [`finish_reasoning`](Self::finish_reasoning) to record it first
+    /// (`docs/thought-handoff.md`).
+    fn snap_round_reasoning(&mut self, reasoning_tokens: u64) {
+        if self.reasoning.is_some() {
+            self.reasoning_snap = Some(reasoning_tokens);
+            return;
+        }
+        let targets = std::mem::take(&mut self.round_reasoning);
+        crate::app::snap_reasoning_tokens(&mut self.history, &targets, reasoning_tokens);
+    }
+
+    /// Whether `event` lets this agent's just-ended thought keep its live
+    /// block in the session view a moment longer — the main session's rule
+    /// over this run's own reply and drafts (`crate::app::THOUGHT_LINGER`,
+    /// `docs/thought-handoff.md`).
+    #[must_use]
+    pub fn lets_thought_linger(&self, event: &StreamEvent) -> bool {
+        crate::app::lets_thought_linger(event, self.streaming.as_deref(), &self.drafts)
     }
 
     /// Settle an open phase from the injected [`thinking`](Self::thinking)
@@ -5216,6 +5258,64 @@ mod tests {
             panic!("the cell is on the transcript");
         };
         assert_eq!(r.tokens, 169, "snapped to the provider's own count");
+    }
+
+    #[test]
+    fn a_usage_frame_waits_for_the_agents_thought_still_on_screen() {
+        // Main parity (docs/thought-handoff.md): the session view keeps the
+        // agent's `● Thinking…` block up a moment after the phase ends, so
+        // the round's usage frame can land before the thought is recorded.
+        // The count waits for it rather than missing it — or landing on the
+        // next round's thought.
+        let mut run = AgentRun::new("a1", "d", GENERAL_PURPOSE, "p", false);
+        run.begin_reasoning();
+        run.apply(&StreamEvent::ThinkingChunk(
+            "a long chain of thought".into(),
+        ));
+        run.apply(&StreamEvent::ThinkingEnd);
+        run.apply(&StreamEvent::Usage(TokenUsage {
+            input: 10,
+            output: 20,
+            cached: 0,
+            cache_write: 0,
+            reasoning: 169,
+        }));
+        let settled = run.finish_reasoning(2).expect("the lingering thought");
+        assert_eq!(settled.tokens, 169, "the settled line shows the real count");
+        let HistoryItem::Reasoning(r) = &run.history[1] else {
+            panic!("the cell is on the transcript");
+        };
+        assert_eq!(r.tokens, 169, "and so does the transcript");
+    }
+
+    #[test]
+    fn an_agents_thought_lingers_only_through_what_shows_nothing() {
+        // The main session's rule over the agent's own reply and drafts
+        // (docs/thought-handoff.md).
+        let piece = |name: &str| {
+            StreamEvent::ToolCallDelta(crate::stream::ToolCallFragment {
+                index: 0,
+                name: name.into(),
+                arguments: String::new(),
+            })
+        };
+        let mut run = AgentRun::new("a1", "d", GENERAL_PURPOSE, "p", false);
+        run.begin_reasoning();
+        run.apply(&StreamEvent::ThinkingChunk("weighing".into()));
+        assert!(run.lets_thought_linger(&piece("bash")));
+        assert!(run.lets_thought_linger(&chunk("\n")));
+        assert!(run.lets_thought_linger(&StreamEvent::RoundCalls(Vec::new())));
+        assert!(run.lets_thought_linger(&StreamEvent::Usage(TokenUsage::default())));
+        assert!(
+            !run.lets_thought_linger(&piece("write")),
+            "a write previews"
+        );
+        assert!(
+            !run.lets_thought_linger(&chunk("Found it")),
+            "the reply speaks"
+        );
+        assert!(!run.lets_thought_linger(&StreamEvent::ToolBatch(Vec::new())));
+        assert!(!run.lets_thought_linger(&StreamEvent::StreamDone));
     }
 
     #[test]

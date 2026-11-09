@@ -262,38 +262,175 @@ fn a_new_turn_starts_with_no_stale_phase() {
     assert_eq!(app.reasoning(), None);
 }
 
-#[test]
-fn a_held_thought_is_kept_until_it_is_dropped() {
-    // The settled phase stays on screen until the next cell takes its rows
-    // (docs/thought-handoff.md): `App` keeps it for the strip to draw, and
-    // the boundary drops it when the held line commits.
+/// A turn whose thought `text` has just **ended**: the backend sent
+/// `ThinkingEnd`, but the phase stays open — its `● Thinking…` block
+/// lingering on screen — until the boundary settles it
+/// (docs/thought-handoff.md).
+fn lingering(text: &str) -> App {
     let mut app = App::new();
     app.begin_stream();
     app.begin_reasoning();
-    app.push_thinking("the plan");
-    let thought = app.finish_reasoning(2).expect("a thought");
-    assert!(app.held_thought().is_none(), "settling alone holds nothing");
-    app.hold_thought(thought.clone());
-    assert_eq!(app.held_thought(), Some(&thought));
-    app.drop_held_thought();
-    assert!(app.held_thought().is_none());
+    app.push_thinking(text);
+    app
+}
+
+/// One piece of a tool call the model is generating, in slot `index`.
+fn piece(index: usize, name: &str, arguments: &str) -> StreamEvent {
+    StreamEvent::ToolCallDelta(crate::stream::ToolCallFragment {
+        index,
+        name: name.to_string(),
+        arguments: arguments.to_string(),
+    })
 }
 
 #[test]
-fn nothing_is_held_across_a_new_turn_or_a_clear() {
-    let held = |app: &mut App| {
-        app.begin_stream();
-        app.begin_reasoning();
-        app.push_thinking("the plan");
-        let thought = app.finish_reasoning(0).expect("a thought");
-        app.hold_thought(thought);
-    };
-    let mut app = App::new();
-    held(&mut app);
+fn a_thought_lingers_through_what_shows_and_records_nothing() {
+    // The backend ends a phase at the round's first tool-call piece, while
+    // the call gets a cell only once its batch is announced
+    // (docs/thought-handoff.md). Until then the round streams only what
+    // shows nothing in the strip and records nothing: the call's own
+    // pieces, blank text, the round's ids and its usage frame. None of that
+    // may take the block down, or the box hops up until the cell lands.
+    let app = lingering("Use the skill first.");
+    let lingers = [
+        piece(0, "skill", ""),
+        piece(0, "", "{\"skill\": \"web-search\"}"),
+        StreamEvent::Chunk("\n\n".into()),
+        StreamEvent::RoundCalls(Vec::new()),
+        StreamEvent::Usage(crate::stream::TokenUsage::default()),
+    ];
+    for event in lingers {
+        assert!(
+            app.lets_thought_linger(&event),
+            "{event:?} shows and records nothing: the thought lingers"
+        );
+    }
+}
+
+#[test]
+fn anything_that_shows_or_records_something_ends_the_linger() {
+    // The thought settles **before** any of these folds in, so its line
+    // lands ahead of what follows in history and scrollback alike, and the
+    // block hands its rows straight to the new content.
+    let app = lingering("Use the skill first.");
+    let ends = [
+        // The reply's first words.
+        StreamEvent::Chunk("**Classical".into()),
+        // A `write` streams into a cell of its own (docs/write-streaming.md).
+        piece(0, "write", ""),
+        StreamEvent::ToolBatch(vec![ToolCallSummary {
+            name: "Skill".into(),
+            args: "web-search".into(),
+        }]),
+        StreamEvent::ToolStart {
+            name: "Bash".into(),
+            args: "ls".into(),
+            detail: None,
+            arguments: None,
+        },
+        StreamEvent::ThinkingStart,
+        StreamEvent::ThinkingChunk("more".into()),
+        StreamEvent::HookNote {
+            label: "Stop hook".into(),
+            text: "keep going".into(),
+            report: None,
+        },
+        StreamEvent::Steered {
+            text: "and the tests".into(),
+        },
+        StreamEvent::NoticeDelivered { seq: 1 },
+        StreamEvent::Retrying { attempt: 1, max: 3 },
+        StreamEvent::Error("boom".into()),
+        StreamEvent::StreamDone,
+    ];
+    for event in ends {
+        assert!(
+            !app.lets_thought_linger(&event),
+            "{event:?} shows or records something: the thought settles first"
+        );
+    }
+    // Blank text is nothing — unless the reply already says something.
+    let mut app = lingering("Use the skill first.");
+    app.push_chunk("Searching");
+    assert!(!app.lets_thought_linger(&StreamEvent::Chunk(" ".into())));
+}
+
+#[test]
+fn a_usage_frame_waits_for_the_thought_still_on_screen() {
+    // The round's usage frame lands before its batch, while the thought's
+    // block still lingers: the thought is not recorded yet, so it is no snap
+    // target yet either. The count waits for it — and the settled line shows
+    // the provider's number, not the estimate.
+    let mut app = lingering("a short thought");
+    app.apply_usage(&crate::stream::TokenUsage {
+        input: 40,
+        output: 200,
+        reasoning: 169,
+        ..crate::stream::TokenUsage::default()
+    });
+    assert!(
+        app.history.is_empty(),
+        "nothing is recorded while it lingers"
+    );
+    let thought = app.finish_reasoning(4).expect("the lingering thought");
+    assert_eq!(thought.tokens, 169, "the settled line shows the real count");
+    assert_eq!(thought_at(&app, 0).tokens, 169, "and so does history");
+}
+
+#[test]
+fn a_waiting_snap_still_splits_over_the_rounds_earlier_thought() {
+    // One `reasoning_tokens` covers the whole round, the phase that settled
+    // at the reply's first words and the one still lingering alike.
+    let mut app = lingering("one");
+    app.finish_reasoning(1);
+    app.push_chunk("interlude");
+    app.begin_reasoning();
+    app.push_thinking("two two two");
+    app.apply_usage(&crate::stream::TokenUsage {
+        input: 10,
+        output: 100,
+        reasoning: 40,
+        ..crate::stream::TokenUsage::default()
+    });
+    app.finish_reasoning(1);
+    let first = thought_at(&app, 0).tokens;
+    let second = thought_at(&app, 1).tokens;
+    assert_eq!(first + second, 40, "the split is exact");
+    assert!(first < second, "weighted by each phase's own estimate");
+}
+
+#[test]
+fn a_dropped_phase_takes_its_waiting_snap_with_it() {
+    // A turn that ends with the phase unsettled — a new turn, a `/clear` —
+    // leaves no count behind for the next thought to take.
+    let mut app = lingering("abandoned");
+    app.apply_usage(&crate::stream::TokenUsage {
+        input: 10,
+        output: 50,
+        reasoning: 30,
+        ..crate::stream::TokenUsage::default()
+    });
     app.begin_stream();
-    assert!(app.held_thought().is_none(), "a fresh turn holds nothing");
-    let mut app = App::new();
-    held(&mut app);
+    app.begin_reasoning();
+    app.push_thinking("the next turn's thought");
+    let thought = app.finish_reasoning(1).expect("a thought");
+    assert_eq!(
+        thought.tokens,
+        count_tokens("the next turn's thought"),
+        "an earlier turn's count never lands on it"
+    );
+    let mut app = lingering("abandoned");
+    app.apply_usage(&crate::stream::TokenUsage {
+        input: 10,
+        output: 50,
+        reasoning: 30,
+        ..crate::stream::TokenUsage::default()
+    });
     app.clear_conversation();
-    assert!(app.held_thought().is_none(), "/clear holds nothing");
+    app.begin_reasoning();
+    app.push_thinking("after the clear");
+    assert_eq!(
+        app.finish_reasoning(1).expect("a thought").tokens,
+        count_tokens("after the clear")
+    );
 }

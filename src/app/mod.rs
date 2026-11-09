@@ -101,14 +101,15 @@ pub use self::mcp_menu::{McpAuthView, McpMenu, McpPage, McpServerAction, server_
 pub use self::model_picker::{ModelFetchError, ModelLoad, ModelPicker};
 pub use self::permission::PermissionPrompt;
 pub use self::queue::QueuedTurn;
-pub use self::reasoning::Reasoning;
+pub use self::reasoning::{Reasoning, THOUGHT_LINGER};
 // Crate-internal: `agents::AgentRun` runs the same reasoning-token snap over
-// its own transcript (`docs/agent-view-streaming.md`).
+// its own transcript (`docs/agent-view-streaming.md`), and lets its thought
+// linger by the same rule (`docs/thought-handoff.md`).
 pub use self::config_review::{
     ConfigReview, ItemChange, ReviewAnswer, ReviewChoice, ReviewItem, ReviewKey, ReviewKind,
     ReviewPage, ReviewSection,
 };
-pub(crate) use self::reasoning::snap_reasoning_tokens;
+pub(crate) use self::reasoning::{lets_thought_linger, snap_reasoning_tokens};
 pub use self::resume::{ResumeControl, ResumeFilter, ResumePicker, ResumeSort};
 pub use self::secrets::{SecretField, SecretForm, SecretsPage};
 pub use self::settings::{SettingRow, SettingsPicker};
@@ -244,13 +245,13 @@ pub struct App {
     /// when the display is off (`ALTER_ZERO_SHOW_THINKING=0`), because the
     /// boundary then never opens one. See `docs/thinking-stream.md`.
     reasoning: Option<String>,
-    /// The thought that just settled, **held on screen** until the next cell
-    /// takes its rows: the strip draws it as its settled `Thought for …`
-    /// line over the thought's tail, standing on the rows the live block
-    /// did, while the boundary holds that line back from scrollback. Set and
-    /// dropped by the boundary ([`hold_thought`](App::hold_thought)); see
-    /// `docs/thought-handoff.md`.
-    held_thought: Option<Reasoning>,
+    /// The round's `reasoning_tokens`, **waiting** for a thought that was
+    /// still open when the round's usage frame landed — its phase over, its
+    /// block lingering on screen until the boundary settles it
+    /// (`docs/thought-handoff.md`). [`finish_reasoning`](App::finish_reasoning)
+    /// snaps the round with it once the thought is recorded; a phase dropped
+    /// unsettled drops it too.
+    reasoning_snap: Option<u64>,
     /// Where this round's settled [`HistoryItem::Reasoning`] items landed in
     /// [`history`](Self::history) — the snap targets for the round's usage
     /// frame, which reports the *real* `reasoning_tokens` the cells were built
